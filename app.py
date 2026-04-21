@@ -3,7 +3,7 @@ app.py  ·  AgroCredito · MVP de Evaluación Agroclimática
 Streamlit front-end — desplegable en Streamlit Cloud sin instalación local.
 
 Estructura:
-  Tab 0 · Inicio          → inputs del predio + botón analizar
+  Tab 0 · Inicio          → inputs del predio + consulta PostGIS + mapa polígono
   Tab 1 · Eligibilidad    → 3 bloques de validación ex-ante
   Tab 2 · Riesgo Climático → indicadores históricos + matriz vulnerabilidad
   Tab 3 · Monitoreo       → NDVI actual + forecast (post-desembolso)
@@ -11,16 +11,21 @@ Estructura:
 Para el MVP, los tabs 1-3 se alimentan con datos de dos casos de estudio
 hardcodeados (café · Eje Cafetero / plátano · Urabá) mientras se
 conectan las APIs y la base PostGIS.
+El Tab 0 ya consulta PostGIS real (modo simulado por defecto,
+activar con USE_REAL_DB = True en utils/postgis_client.py).
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import folium
+from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
 from datetime import date, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+
+from utils.postgis_client import get_predio_por_punto
 
 # ── Configuración de página ──────────────────────────────────────────────────
 st.set_page_config(
@@ -47,7 +52,7 @@ st.markdown("""
 
 # ════════════════════════════════════════════════════════════════════════════
 #  DATOS DE CASOS DE ESTUDIO (hardcodeados para MVP)
-#  → Se reemplazarán por llamadas reales a EOSDA API + PostGIS
+#  → Los tabs 1-3 se alimentarán progresivamente desde EOSDA API + PostGIS
 # ════════════════════════════════════════════════════════════════════════════
 
 CASOS_ESTUDIO = {
@@ -129,7 +134,7 @@ CASOS_ESTUDIO = {
 #  HELPERS
 # ════════════════════════════════════════════════════════════════════════════
 
-COLOR_RIESGO = {"Nulo": "🟢", "Bajo": "🟢", "Medio": "🟡", "Alto": "🔴", "Muy Alto": "🔴"}
+COLOR_RIESGO   = {"Nulo": "🟢", "Bajo": "🟢", "Medio": "🟡", "Alto": "🔴", "Muy Alto": "🔴"}
 COLOR_SEMAFORO = {"verde": "semaforo-verde", "naranja": "semaforo-naranja", "rojo": "semaforo-rojo"}
 
 def semaforo(texto: str, nivel: str):
@@ -138,15 +143,10 @@ def semaforo(texto: str, nivel: str):
 def kpi(label: str, valor, unidad: str = ""):
     st.markdown(
         f'<div class="kpi-box"><div style="font-size:0.78rem;color:#64748b">{label}</div>'
-        f'<div style="font-size:1.4rem;font-weight:700">{valor}<span style="font-size:0.85rem;color:#64748b"> {unidad}</span></div></div>',
+        f'<div style="font-size:1.4rem;font-weight:700">{valor}'
+        f'<span style="font-size:0.85rem;color:#64748b"> {unidad}</span></div></div>',
         unsafe_allow_html=True,
     )
-
-def mapa_predio(lat, lon, zoom=13):
-    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="Esri.WorldImagery")
-    folium.Marker([lat, lon], tooltip="Predio", icon=folium.Icon(color="green", icon="leaf")).add_to(m)
-    folium.Circle([lat, lon], radius=400, color="#22c55e", fill=True, fill_opacity=0.15).add_to(m)
-    return m
 
 def gauge_riesgo(valor_pct: int, titulo: str):
     fig = go.Figure(go.Indicator(
@@ -166,6 +166,52 @@ def gauge_riesgo(valor_pct: int, titulo: str):
     ))
     fig.update_layout(height=200, margin=dict(t=40, b=10, l=10, r=10))
     return fig
+
+def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
+    """Mapa con el polígono del predio y el punto ingresado."""
+    gdf      = predio["gdf"]
+    centroid = gdf.geometry.iloc[0].centroid
+    m = folium.Map(
+        location=[centroid.y, centroid.x],
+        zoom_start=15,
+        tiles="Esri.WorldImagery",
+    )
+    Fullscreen().add_to(m)
+    folium.GeoJson(
+        gdf.__geo_interface__,
+        name="Predio",
+        style_function=lambda _: {
+            "fillColor": "#22c55e",
+            "color":     "#16a34a",
+            "weight":    2.5,
+            "fillOpacity": 0.25,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["codigo", "municipio", "area_catastral_ha"],
+            aliases=["Código", "Municipio", "Área (ha)"],
+        ),
+    ).add_to(m)
+    folium.Marker(
+        [lat, lon],
+        tooltip="Punto ingresado",
+        icon=folium.Icon(color="red", icon="map-marker", prefix="fa"),
+    ).add_to(m)
+    return m
+
+def mapa_simple(lat: float, lon: float, zoom: int = 13) -> folium.Map:
+    """Mapa de fallback sin polígono (modo simulado sin PostGIS real)."""
+    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="Esri.WorldImagery")
+    Fullscreen().add_to(m)
+    folium.Marker(
+        [lat, lon],
+        tooltip="Predio",
+        icon=folium.Icon(color="green", icon="leaf"),
+    ).add_to(m)
+    folium.Circle(
+        [lat, lon], radius=400,
+        color="#22c55e", fill=True, fill_opacity=0.15,
+    ).add_to(m)
+    return m
 
 # ════════════════════════════════════════════════════════════════════════════
 #  HEADER
@@ -194,12 +240,6 @@ tab_inicio, tab_elegibilidad, tab_riesgo, tab_monitoreo = st.tabs([
 # ════════════════════════════════════════════════════════════════════════════
 with tab_inicio:
     st.subheader("Datos del predio a evaluar")
-    st.info(
-        "**Demo MVP:** Selecciona uno de los casos de estudio precargados, o ingresa "
-        "coordenadas manualmente. La conexión en tiempo real a EOSDA API y PostGIS "
-        "estará activa en la versión de producción.",
-        icon="ℹ️",
-    )
 
     modo = st.radio(
         "Modo de entrada",
@@ -209,35 +249,61 @@ with tab_inicio:
 
     if modo == "📂 Caso de estudio (demo)":
         caso_sel = st.selectbox("Selecciona caso de estudio", list(CASOS_ESTUDIO.keys()))
-        d = CASOS_ESTUDIO[caso_sel]
-        st.success(f"**Municipio:** {d['municipio']}  ·  **Cultivo:** {d['cultivo'].capitalize()}  ·  "
-                   f"**Coordenadas:** {d['lat']:.4f}, {d['lon']:.4f}")
+        d        = CASOS_ESTUDIO[caso_sel]
+        lat, lon = d["lat"], d["lon"]
         st.session_state["datos"] = d
-        st.session_state["caso"] = caso_sel
-
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            lat_in = st.number_input("Latitud", value=4.8087, format="%.6f")
+            lat = st.number_input("Latitud",   value=4.8087,   format="%.6f")
         with c2:
-            lon_in = st.number_input("Longitud", value=-75.6906, format="%.6f")
+            lon = st.number_input("Longitud",  value=-75.6906, format="%.6f")
         with c3:
             cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
-
-        st.caption("⚠️ En modo manual, los resultados mostrarán datos simulados hasta que la API esté conectada.")
-        # Para el MVP redirigimos al caso más cercano según cultivo
         caso_manual = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
-        d = {**CASOS_ESTUDIO[caso_manual], "lat": lat_in, "lon": lon_in, "cultivo": cultivo_in}
+        d = {**CASOS_ESTUDIO[caso_manual], "lat": lat, "lon": lon}
         st.session_state["datos"] = d
-        st.session_state["caso"] = f"Manual ({cultivo_in})"
 
-    st.markdown("#### Vista del predio")
-    datos_tab0 = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-    st_folium(mapa_predio(datos_tab0["lat"], datos_tab0["lon"]), width=700, height=350, returned_objects=[])
+    st.markdown("---")
+
+    # ── Consulta PostGIS ──────────────────────────────────────────────────
+    st.markdown("#### 🗺️ Identificación del predio catastral")
+
+    with st.spinner("Consultando base catastral..."):
+        predio = get_predio_por_punto(lat, lon)
+
+    if predio is None:
+        st.warning("No se encontró ningún predio en las coordenadas indicadas. Verifica lat/lon.")
+        st_folium(mapa_simple(lat, lon), width=750, height=420, returned_objects=[])
+    else:
+        # ── Métricas ──────────────────────────────────────────────────────
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Código catastral",  predio["codigo"])
+        with c2:
+            st.metric("Municipio",         predio["municipio"])
+        with c3:
+            st.metric("Departamento",      predio["departamento"])
+        with c4:
+            st.metric("Área catastral",    f"{predio['area_catastral_ha']} ha")
+
+        # Guardamos el predio en session_state para usarlo en otros tabs
+        st.session_state["predio"] = predio
+
+        # ── Mapa ──────────────────────────────────────────────────────────
+        st_folium(
+            mapa_con_poligono(lat, lon, predio),
+            width=750, height=420,
+            returned_objects=[],
+        )
+        st.caption(
+            "🟢 Polígono: predio catastral identificado  ·  "
+            "🔴 Marcador: coordenadas ingresadas por el cliente"
+        )
 
     st.markdown("---")
     st.markdown(
-        "👉 Navega a los tabs superiores para ver los resultados de **Eligibilidad**, "
+        "👉 Navega a los tabs superiores para ver **Eligibilidad**, "
         "**Riesgo Agroclimático** y **Monitoreo**."
     )
 
@@ -314,8 +380,10 @@ with tab_elegibilidad:
             title="Serie NDVI mensual (últimos 12 meses)",
             color_discrete_sequence=["#16a34a"],
         )
-        fig_ndvi.add_hline(y=d["ndvi_umbral"], line_dash="dash", line_color="#dc2626",
-                           annotation_text=f"Umbral {d['ndvi_umbral']}")
+        fig_ndvi.add_hline(
+            y=d["ndvi_umbral"], line_dash="dash", line_color="#dc2626",
+            annotation_text=f"Umbral {d['ndvi_umbral']}",
+        )
         fig_ndvi.update_layout(height=250, margin=dict(t=40, b=20))
         st.plotly_chart(fig_ndvi, use_container_width=True)
 
@@ -326,7 +394,7 @@ with tab_elegibilidad:
             kpi("Construcciones identificadas", d["construcciones_n"], "unidades")
             st.caption(f"**Detalle:** {d['construcciones_desc']}")
         with c2:
-            dist = d["distancia_urbana_km"]
+            dist      = d["distancia_urbana_km"]
             nivel_dist = "verde" if dist < 20 else "naranja"
             kpi("Distancia a zona urbana", dist, "km")
             semaforo(
@@ -338,17 +406,18 @@ with tab_elegibilidad:
     st.markdown("---")
     st.markdown("### 📋 Resumen de Eligibilidad")
     resumen = pd.DataFrame({
-        "Validación": ["Frontera agrícola", "Área efectiva cultivable", "Aptitud al cultivo",
-                       "Actividad productiva (NDVI)", "Infraestructura"],
+        "Validación": [
+            "Frontera agrícola", "Área efectiva cultivable", "Aptitud al cultivo",
+            "Actividad productiva (NDVI)", "Infraestructura",
+        ],
         "Resultado": [
             d["frontera_agricola"],
             f"{d['area_efectiva_ha']} ha ({pct_efectiva}%)",
             d["aptitud_cultivo"],
-            "✅ Activo" if d["ndvi_promedio_3a"] >= d["ndvi_umbral"] else "⚠️ Por verificar",
+            "✅ Activo" if ndvi_ok else "⚠️ Por verificar",
             d["construcciones_desc"],
         ],
-        "Estado": ["✅", "✅", "✅", "✅" if d["ndvi_promedio_3a"] >= d["ndvi_umbral"] else "⚠️",
-                   "✅"],
+        "Estado": ["✅", "✅", "✅", "✅" if ndvi_ok else "⚠️", "✅"],
     })
     st.dataframe(resumen, use_container_width=True, hide_index=True)
 
@@ -356,7 +425,7 @@ with tab_elegibilidad:
 #  TAB 2 · RIESGO AGROCLIMÁTICO
 # ════════════════════════════════════════════════════════════════════════════
 with tab_riesgo:
-    d = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
+    d      = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
     cultivo = d["cultivo"]
 
     st.subheader(f"Análisis de Riesgo Agroclimático · {cultivo.capitalize()}")
@@ -364,62 +433,64 @@ with tab_riesgo:
 
     meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
-    # Precipitación y temperatura
     c1, c2 = st.columns(2)
     with c1:
-        fig_p = px.bar(x=meses, y=d["precip_mensual"],
-                       labels={"x": "Mes", "y": "mm"},
-                       title="Precipitación media mensual (mm)",
-                       color_discrete_sequence=["#3b82f6"])
+        fig_p = px.bar(
+            x=meses, y=d["precip_mensual"],
+            labels={"x": "Mes", "y": "mm"},
+            title="Precipitación media mensual (mm)",
+            color_discrete_sequence=["#3b82f6"],
+        )
         fig_p.update_layout(height=260, margin=dict(t=40, b=20))
         st.plotly_chart(fig_p, use_container_width=True)
 
     with c2:
         fig_t = go.Figure()
-        fig_t.add_trace(go.Scatter(x=meses, y=d["temp_max_mensual"], name="Tmax",
-                                   line=dict(color="#ef4444")))
-        fig_t.add_trace(go.Scatter(x=meses, y=d["temp_min_mensual"], name="Tmin",
-                                   line=dict(color="#3b82f6"), fill="tonexty",
-                                   fillcolor="rgba(59,130,246,0.1)"))
-        fig_t.update_layout(title="Temperatura mensual (°C)", height=260,
-                             margin=dict(t=40, b=20))
+        fig_t.add_trace(go.Scatter(
+            x=meses, y=d["temp_max_mensual"], name="Tmax",
+            line=dict(color="#ef4444"),
+        ))
+        fig_t.add_trace(go.Scatter(
+            x=meses, y=d["temp_min_mensual"], name="Tmin",
+            line=dict(color="#3b82f6"),
+            fill="tonexty", fillcolor="rgba(59,130,246,0.1)",
+        ))
+        fig_t.update_layout(title="Temperatura mensual (°C)", height=260, margin=dict(t=40, b=20))
         st.plotly_chart(fig_t, use_container_width=True)
 
-    # Matriz de vulnerabilidad
     st.markdown("---")
     st.markdown(f"### 🧮 Matriz de Vulnerabilidad · {cultivo.capitalize()}")
 
     MATRIZ = {
         "café": {
-            "Déficit hídrico (sequía)": ("Bajo", "Precipitación anual >1.200 mm · sin meses secos extremos"),
-            "Exceso de lluvia": ("Medio", "Meses con >300 mm pueden afectar floración"),
-            "Heladas": ("Bajo", "T_min > 10°C en todo el año"),
-            "Temperatura máxima": ("Bajo", "T_max < 30°C · óptimo cafetero"),
-            "Viento fuerte": ("Bajo", "Sin registro de episodios severos"),
+            "Déficit hídrico (sequía)": ("Bajo",  "Precipitación anual >1.200 mm · sin meses secos extremos"),
+            "Exceso de lluvia":         ("Medio", "Meses con >300 mm pueden afectar floración"),
+            "Heladas":                  ("Bajo",  "T_min > 10°C en todo el año"),
+            "Temperatura máxima":       ("Bajo",  "T_max < 30°C · óptimo cafetero"),
+            "Viento fuerte":            ("Bajo",  "Sin registro de episodios severos"),
         },
         "plátano": {
-            "Déficit hídrico (sequía)": ("Bajo", "Precipitación abundante en Urabá"),
-            "Exceso de lluvia": ("Alto", "Precipitación > 350 mm/mes · riesgo sigatoka"),
-            "Heladas": ("Nulo", "T_min > 18°C permanente"),
-            "Temperatura máxima": ("Medio", "T_max > 32°C en verano · estrés hídrico"),
-            "Viento fuerte": ("Medio", "Zona costera · riesgo volcamiento"),
+            "Déficit hídrico (sequía)": ("Bajo",  "Precipitación abundante en Urabá"),
+            "Exceso de lluvia":         ("Alto",  "Precipitación > 350 mm/mes · riesgo sigatoka"),
+            "Heladas":                  ("Nulo",  "T_min > 18°C permanente"),
+            "Temperatura máxima":       ("Medio", "T_max > 32°C en verano · estrés hídrico"),
+            "Viento fuerte":            ("Medio", "Zona costera · riesgo volcamiento"),
         },
     }
 
-    matriz_data = []
-    for indicador, (riesgo, detalle) in MATRIZ[cultivo].items():
-        matriz_data.append({
-            "Indicador": indicador,
+    matriz_data = [
+        {
+            "Indicador":       indicador,
             "Nivel de riesgo": f"{COLOR_RIESGO[riesgo]} {riesgo}",
-            "Detalle": detalle,
-        })
-    df_matriz = pd.DataFrame(matriz_data)
-    st.dataframe(df_matriz, use_container_width=True, hide_index=True)
+            "Detalle":         detalle,
+        }
+        for indicador, (riesgo, detalle) in MATRIZ[cultivo].items()
+    ]
+    st.dataframe(pd.DataFrame(matriz_data), use_container_width=True, hide_index=True)
 
-    # Riesgo global
     st.markdown("---")
     riesgo_global = d["riesgo_global"]
-    nivel_global = {"Bajo": "verde", "Medio": "naranja", "Alto": "rojo"}.get(riesgo_global, "naranja")
+    nivel_global  = {"Bajo": "verde", "Medio": "naranja", "Alto": "rojo"}.get(riesgo_global, "naranja")
     semaforo(
         f"**Riesgo agroclimático global del predio: {riesgo_global}** · "
         f"Cultivo: {cultivo.capitalize()} · {d.get('municipio','')}",
@@ -435,13 +506,11 @@ with tab_monitoreo:
     st.subheader("Monitoreo en Tiempo Real y Forecast")
     st.caption("Módulo activo durante el ciclo de vida del crédito.")
 
-    # Alerta activa
     if d.get("alerta_activa"):
         st.error(d.get("alerta_msg", "⚠️ Alerta climática activa"))
     else:
         st.success("✅ Sin alertas climáticas activas en este momento.")
 
-    # KPIs de monitoreo
     c1, c2, c3 = st.columns(3)
     with c1:
         kpi("NDVI actual", round(d["ndvi_actual"], 2))
@@ -453,34 +522,41 @@ with tab_monitoreo:
 
     st.markdown("---")
 
-    # Forecast 7 días
     dias = [(date.today() + timedelta(days=i)).strftime("%d %b") for i in range(7)]
     c1, c2 = st.columns(2)
     with c1:
-        fig_fp = px.bar(x=dias, y=d["forecast_precip_7d"],
-                        title="Precipitación · Forecast 7 días (mm)",
-                        labels={"x": "", "y": "mm"},
-                        color_discrete_sequence=["#3b82f6"])
+        fig_fp = px.bar(
+            x=dias, y=d["forecast_precip_7d"],
+            title="Precipitación · Forecast 7 días (mm)",
+            labels={"x": "", "y": "mm"},
+            color_discrete_sequence=["#3b82f6"],
+        )
         fig_fp.update_layout(height=260, margin=dict(t=40, b=20))
         st.plotly_chart(fig_fp, use_container_width=True)
 
     with c2:
-        fig_ft = px.line(x=dias, y=d["forecast_temp_7d"],
-                         title="Temperatura · Forecast 7 días (°C)",
-                         labels={"x": "", "y": "°C"},
-                         color_discrete_sequence=["#ef4444"])
+        fig_ft = px.line(
+            x=dias, y=d["forecast_temp_7d"],
+            title="Temperatura · Forecast 7 días (°C)",
+            labels={"x": "", "y": "°C"},
+            color_discrete_sequence=["#ef4444"],
+        )
         fig_ft.update_layout(height=260, margin=dict(t=40, b=20))
         st.plotly_chart(fig_ft, use_container_width=True)
 
     st.markdown("---")
     st.markdown("### 📈 Evolución NDVI (últimos 12 meses)")
     meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-    fig_ndvi_m = px.line(x=meses, y=d["ndvi_mensual_hist"],
-                         labels={"x": "Mes", "y": "NDVI"},
-                         color_discrete_sequence=["#16a34a"])
-    fig_ndvi_m.add_scatter(x=[meses[-1]], y=[d["ndvi_actual"]],
-                            mode="markers", marker=dict(size=10, color="#dc2626"),
-                            name="NDVI actual")
+    fig_ndvi_m = px.line(
+        x=meses, y=d["ndvi_mensual_hist"],
+        labels={"x": "Mes", "y": "NDVI"},
+        color_discrete_sequence=["#16a34a"],
+    )
+    fig_ndvi_m.add_scatter(
+        x=[meses[-1]], y=[d["ndvi_actual"]],
+        mode="markers", marker=dict(size=10, color="#dc2626"),
+        name="NDVI actual",
+    )
     fig_ndvi_m.update_layout(height=260, margin=dict(t=20, b=20))
     st.plotly_chart(fig_ndvi_m, use_container_width=True)
 
