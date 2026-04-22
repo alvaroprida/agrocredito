@@ -187,8 +187,8 @@ def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
             "fillOpacity": 0.25,
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=["codigo", "municipio", "area_catastral_ha"],
-            aliases=["Código", "Municipio", "Área (ha)"],
+            fields=["codigo", "departamento", "area_ha"],
+            aliases=["Código", "Departamento", "Área (ha)"],
         ),
     ).add_to(m)
     folium.Marker(
@@ -251,22 +251,38 @@ with tab_inicio:
         caso_sel = st.selectbox("Selecciona caso de estudio", list(CASOS_ESTUDIO.keys()))
         d        = CASOS_ESTUDIO[caso_sel]
         lat, lon = d["lat"], d["lon"]
-        st.session_state["datos"] = d
+        st.session_state["datos"]     = d
+        st.session_state["lat"]       = lat
+        st.session_state["lon"]       = lon
+        st.session_state["analizado"] = True   # demo siempre lista
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            lat = st.number_input("Latitud",   value=4.8087,   format="%.6f")
+            lat = st.number_input("Latitud",  value=st.session_state.get("lat", 4.7110), format="%.6f")
         with c2:
-            lon = st.number_input("Longitud",  value=-75.6906, format="%.6f")
+            lon = st.number_input("Longitud", value=st.session_state.get("lon", -74.0721), format="%.6f")
         with c3:
             cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
-        caso_manual = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
-        d = {**CASOS_ESTUDIO[caso_manual], "lat": lat, "lon": lon}
-        st.session_state["datos"] = d
+
+        if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
+            st.session_state["lat"]       = lat
+            st.session_state["lon"]       = lon
+            st.session_state["cultivo"]   = cultivo_in
+            st.session_state["analizado"] = True
+            # Datos base del caso de estudio del cultivo seleccionado
+            caso_manual = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
+            st.session_state["datos"] = {**CASOS_ESTUDIO[caso_manual], "lat": lat, "lon": lon}
 
     st.markdown("---")
 
     # ── Consulta PostGIS ──────────────────────────────────────────────────
+    if not st.session_state.get("analizado"):
+        st.info("Introduce las coordenadas del predio y pulsa **Analizar predio**.")
+        st.stop()
+
+    lat = st.session_state.get("lat", lat)
+    lon = st.session_state.get("lon", lon)
+
     st.markdown("#### 🗺️ Identificación del predio catastral")
 
     with st.spinner("Consultando base catastral..."):
@@ -279,13 +295,15 @@ with tab_inicio:
         # ── Métricas ──────────────────────────────────────────────────────
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Código catastral",  predio["codigo"])
+            st.metric("Código catastral", predio["codigo"])
         with c2:
-            st.metric("Municipio",         predio["municipio"])
+            st.metric("Departamento",     predio.get("departamento", "—"))
         with c3:
-            st.metric("Departamento",      predio["departamento"])
+            st.metric("Área catastral",   f"{predio.get('area_ha', '—')} ha")
         with c4:
-            st.metric("Área catastral",    f"{predio['area_catastral_ha']} ha")
+            cultivo_sel = st.session_state.get("cultivo",
+                          st.session_state.get("datos", {}).get("cultivo", "café"))
+            st.metric("Cultivo", cultivo_sel.capitalize())
 
         # Guardamos el predio en session_state para usarlo en otros tabs
         st.session_state["predio"] = predio
