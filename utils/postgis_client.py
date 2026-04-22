@@ -119,16 +119,10 @@ def _query_mock(lat: float, lon: float) -> dict | None:
         return None
     geom = shape(data["geojson"])
     gdf = gpd.GeoDataFrame(
-        [{
-            "codigo": data["codigo"],
-            "municipio": data["municipio"],
-            "departamento": data["departamento"],
-            "area_catastral_ha": data["area_catastral_ha"],
-        }],
-        geometry=[geom],
-        crs="EPSG:4326",
+        [{"codigo": data["codigo"]}],
+        geometry=[geom], crs="EPSG:4326",
     )
-    return {**data, "gdf": gdf}
+    return {"codigo": data["codigo"], "geojson": data["geojson"], "gdf": gdf}
 
 
 def _query_real(lat: float, lon: float) -> dict | None:
@@ -142,8 +136,6 @@ def _query_real(lat: float, lon: float) -> dict | None:
     sql = text("""
         SELECT
             codigo,
-            COALESCE(departamento, '') AS departamento,
-            COALESCE(ROUND(area_ha::numeric, 2), 0) AS area_ha,
             ST_AsGeoJSON(geom)::json AS geojson
         FROM predios_mvp
         WHERE ST_Contains(
@@ -161,15 +153,13 @@ def _query_real(lat: float, lon: float) -> dict | None:
         geojson = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
         geom = shape(geojson)
         gdf = gpd.GeoDataFrame(
-            [{"codigo": row.codigo, "departamento": row.departamento, "area_ha": row.area_ha}],
+            [{"codigo": row.codigo}],
             geometry=[geom], crs="EPSG:4326",
         )
         return {
-            "codigo":       row.codigo,
-            "departamento": row.departamento,
-            "area_ha":      row.area_ha,
-            "geojson":      geojson,
-            "gdf":          gdf,
+            "codigo":  row.codigo,
+            "geojson": geojson,
+            "gdf":     gdf,
         }
     except Exception as e:
         raise ConnectionError(f"Error consultando PostGIS: {e}")

@@ -187,11 +187,8 @@ def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
             "fillOpacity": 0.25,
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=[c for c in ["codigo", "departamento", "area_ha"] if c in gdf.columns],
-            aliases=[a for c, a in zip(
-                ["codigo", "departamento", "area_ha"],
-                ["Código", "Departamento", "Área (ha)"]
-            ) if c in gdf.columns],
+            fields=["codigo"],
+            aliases=["Código catastral"],
         ),
     ).add_to(m)
     folium.Marker(
@@ -296,14 +293,10 @@ with tab_inicio:
         st_folium(mapa_simple(lat, lon), width=750, height=420, returned_objects=[])
     else:
         # ── Métricas ──────────────────────────────────────────────────────
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         with c1:
             st.metric("Código catastral", predio["codigo"])
         with c2:
-            st.metric("Departamento",     predio.get("departamento", "—"))
-        with c3:
-            st.metric("Área catastral",   f"{predio.get('area_ha', '—')} ha")
-        with c4:
             cultivo_sel = st.session_state.get("cultivo",
                           st.session_state.get("datos", {}).get("cultivo", "café"))
             st.metric("Cultivo", cultivo_sel.capitalize())
