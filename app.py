@@ -187,8 +187,11 @@ def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
             "fillOpacity": 0.25,
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=["codigo", "departamento", "area_ha"],
-            aliases=["Código", "Departamento", "Área (ha)"],
+            fields=[c for c in ["codigo", "departamento", "area_ha"] if c in gdf.columns],
+            aliases=[a for c, a in zip(
+                ["codigo", "departamento", "area_ha"],
+                ["Código", "Departamento", "Área (ha)"]
+            ) if c in gdf.columns],
         ),
     ).add_to(m)
     folium.Marker(
