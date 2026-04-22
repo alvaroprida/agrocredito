@@ -25,7 +25,7 @@ except ImportError:
 
 # ── Configuración ────────────────────────────────────────────────────────────
 # Cambia a True cuando tengas la BD accesible (Supabase, ngrok, etc.)
-USE_REAL_DB = True
+USE_REAL_DB = False
 
 # ── Conexión ─────────────────────────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ def _get_engine():
         db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
         raise ValueError("DATABASE_URL no configurada en secrets ni en variables de entorno.")
+    # Supabase requiere SSL para conexiones externas
+    if "supabase.co" in db_url and "sslmode" not in db_url:
+        db_url += "?sslmode=require"
     return create_engine(db_url)
 
 
@@ -142,14 +145,11 @@ def _query_real(lat: float, lon: float) -> dict | None:
             COALESCE(municipio, '')        AS municipio,
             COALESCE(departamento, '')     AS departamento,
             COALESCE(area_catastral_ha, 0) AS area_catastral_ha,
-            ST_AsGeoJSON(ST_Transform(geom, 4326))::json AS geojson
+            ST_AsGeoJSON(geom)::json       AS geojson
         FROM predios
         WHERE ST_Contains(
             geom,
-            ST_Transform(
-                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
-                ST_SRID(geom)
-            )
+            ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
         )
         LIMIT 1
     """)
