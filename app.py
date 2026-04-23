@@ -259,28 +259,26 @@ with tab_inicio:
     if modo == "📂 Caso de estudio (demo)":
         caso_sel = st.selectbox("Selecciona caso de estudio", list(CASOS_ESTUDIO.keys()))
         d        = CASOS_ESTUDIO[caso_sel]
-        lat, lon = d["lat"], d["lon"]
         st.session_state["datos"]     = d
-        st.session_state["lat"]       = lat
-        st.session_state["lon"]       = lon
-        st.session_state["analizado"] = True   # demo siempre lista
+        st.session_state["lat"]       = d["lat"]
+        st.session_state["lon"]       = d["lon"]
+        st.session_state["analizado"] = True
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            lat = st.number_input("Latitud",  value=st.session_state.get("lat", 4.7110), format="%.6f")
+            lat_input = st.number_input("Latitud",  value=4.2433, format="%.6f")
         with c2:
-            lon = st.number_input("Longitud", value=st.session_state.get("lon", -74.0721), format="%.6f")
+            lon_input = st.number_input("Longitud", value=-74.0276, format="%.6f")
         with c3:
             cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
 
         if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
-            st.session_state["lat"]       = lat
-            st.session_state["lon"]       = lon
+            st.session_state["lat"]       = lat_input
+            st.session_state["lon"]       = lon_input
             st.session_state["cultivo"]   = cultivo_in
             st.session_state["analizado"] = True
-            # Datos base del caso de estudio del cultivo seleccionado
             caso_manual = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
-            st.session_state["datos"] = {**CASOS_ESTUDIO[caso_manual], "lat": lat, "lon": lon}
+            st.session_state["datos"] = {**CASOS_ESTUDIO[caso_manual], "lat": lat_input, "lon": lon_input}
 
     st.markdown("---")
 
@@ -289,8 +287,9 @@ with tab_inicio:
         st.info("Introduce las coordenadas del predio y pulsa **Analizar predio**.")
         st.stop()
 
-    lat = st.session_state.get("lat", lat)
-    lon = st.session_state.get("lon", lon)
+    # Siempre leer lat/lon desde session_state — nunca desde variables locales
+    lat = st.session_state["lat"]
+    lon = st.session_state["lon"]
 
     st.markdown("#### 🗺️ Identificación del predio catastral")
 
