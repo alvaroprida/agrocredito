@@ -196,6 +196,7 @@ def get_frontera(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
         mock_records=[{"tipo_condi": "Frontera agrícola", "area_ha": area_predio_ha}]
     )
     if gdf is not None and area_predio_ha > 0:
+        gdf["area_ha"]    = gdf["area_ha"].apply(lambda x: float(x) if x is not None else 0.0)
         gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
     return gdf
 
@@ -231,6 +232,7 @@ def get_aptitud(gdf_predio: gpd.GeoDataFrame, cultivo: str) -> gpd.GeoDataFrame 
         mock_records=[{"aptitud": "Alta", "area_ha": area_predio_ha}]
     )
     if gdf is not None and area_predio_ha > 0:
+        gdf["area_ha"]    = gdf["area_ha"].apply(lambda x: float(x) if x is not None else 0.0)
         gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
     return gdf
 
@@ -265,6 +267,7 @@ def get_valor_potencial(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None
         mock_records=[{"clase_ufh": "03", "area_ha": area_predio_ha}]
     )
     if gdf is not None and area_predio_ha > 0:
+        gdf["area_ha"]    = gdf["area_ha"].apply(lambda x: float(x) if x is not None else 0.0)
         gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
     return gdf
 
