@@ -25,7 +25,7 @@ except ImportError:
 
 # ── Configuración ────────────────────────────────────────────────────────────
 # Cambia a True cuando tengas la BD accesible (Supabase, ngrok, etc.)
-USE_REAL_DB = False
+USE_REAL_DB = True
 
 # ── Conexión ─────────────────────────────────────────────────────────────────
 
