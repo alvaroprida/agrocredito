@@ -2,10 +2,11 @@
 utils/postgis_client.py
 Funciones de consulta a la base PostGIS / Supabase.
 
-Funciones principales:
+Funciones:
     get_predio_por_punto(lat, lon)       → polígono + código + departamento + área
-    get_frontera(gdf_predio)             → tipo de frontera agrícola del predio
+    get_frontera(gdf_predio)             → tipo de frontera agrícola
     get_aptitud(gdf_predio, cultivo)     → aptitud del predio al cultivo
+    get_valor_potencial(gdf_predio)      → valor potencial (ufh_mvp)
     get_construcciones(gdf_predio)       → construcciones dentro del predio
 """
 
@@ -71,12 +72,42 @@ def _mock_predio(lat, lon):
             best_dist, best = d, data
     return best
 
-def _mock_gdf(data):
-    geom = shape(data["geojson"])
-    return gpd.GeoDataFrame(
-        [{"codigo": data["codigo"], "departamento": data["departamento"], "area_ha": data["area_ha"]}],
-        geometry=[geom], crs="EPSG:4326",
-    )
+
+# ── Helper: ejecutar query de intersección ────────────────────────────────────
+
+def _query_intersection(sql, geojson_predio, columns, mock_records=None):
+    """
+    Ejecuta una query de intersección contra Supabase.
+    Devuelve GeoDataFrame o None.
+    """
+    if not (USE_REAL_DB and DB_LIBS_OK):
+        if mock_records is None:
+            return None
+        geom = shape(geojson_predio)
+        return gpd.GeoDataFrame(mock_records, geometry=[geom]*len(mock_records), crs="EPSG:4326")
+
+    try:
+        with _get_engine().connect() as conn:
+            rows = conn.execute(sql, {"geom": json.dumps(geojson_predio)}).fetchall()
+        if not rows:
+            return None
+        records, geometries = [], []
+        for row in rows:
+            gj = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
+            try:
+                geom = shape(gj)
+                if not geom.is_empty:
+                    records.append({c: getattr(row, c) for c in columns})
+                    geometries.append(geom)
+            except Exception:
+                continue
+        if not records:
+            return None
+        return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
+    except Exception as e:
+        import streamlit as st
+        st.error(f"❌ Error consultando PostGIS: {e}")
+        return None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -102,7 +133,11 @@ def _query_predio_mock(lat, lon):
     data = _mock_predio(lat, lon)
     if data is None:
         return None
-    gdf = _mock_gdf(data)
+    geom = shape(data["geojson"])
+    gdf = gpd.GeoDataFrame(
+        [{"codigo": data["codigo"], "departamento": data["departamento"], "area_ha": data["area_ha"]}],
+        geometry=[geom], crs="EPSG:4326",
+    )
     return {"codigo": data["codigo"], "departamento": data["departamento"],
             "area_ha": data["area_ha"], "geojson": data["geojson"], "gdf": gdf}
 
@@ -137,57 +172,32 @@ def _query_predio_real(lat, lon):
 
 def get_frontera(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
     """
-    Dado el GeoDataFrame del predio, devuelve las zonas de frontera agrícola
-    que intersectan con él (tabla frontera_mvp).
-    Retorna GeoDataFrame con columna tipo_condi, o None si no hay intersección.
+    Devuelve zonas de frontera agrícola que intersectan el predio.
+    Columnas: tipo_condi, area_ha, pct_predio
     """
-    if USE_REAL_DB and DB_LIBS_OK:
-        try:
-            return _query_frontera_real(gdf_predio)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"❌ Error consultando frontera: {e}")
-            return None
-    return _query_frontera_mock(gdf_predio)
-
-
-def _query_frontera_mock(gdf_predio):
-    # Simulado: devuelve frontera agrícola genérica sobre el bbox del predio
-    geom = gdf_predio.geometry.iloc[0]
-    return gpd.GeoDataFrame(
-        [{"tipo_condi": "Frontera agrícola"}],
-        geometry=[geom], crs="EPSG:4326",
-    )
-
-
-def _query_frontera_real(gdf_predio):
     geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
+    area_predio_ha = float(gdf_predio.geometry.iloc[0].area * (111320 ** 2) / 10000)
+
     sql = text("""
         SELECT
             tipo_condi,
+            ROUND((ST_Area(
+                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+                ::geography) / 10000)::numeric, 2) AS area_ha,
             ST_AsGeoJSON(
                 ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
             )::json AS geojson
         FROM frontera_mvp
         WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
     """)
-    with _get_engine().connect() as conn:
-        rows = conn.execute(sql, {"geom": json.dumps(geojson_predio)}).fetchall()
-    if not rows:
-        return None
-    records, geometries = [], []
-    for row in rows:
-        gj = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
-        try:
-            geom = shape(gj)
-            if not geom.is_empty:
-                records.append({"tipo_condi": row.tipo_condi})
-                geometries.append(geom)
-        except Exception:
-            continue
-    if not records:
-        return None
-    return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
+
+    gdf = _query_intersection(
+        sql, geojson_predio, ["tipo_condi", "area_ha"],
+        mock_records=[{"tipo_condi": "Frontera agrícola", "area_ha": area_predio_ha}]
+    )
+    if gdf is not None and area_predio_ha > 0:
+        gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
+    return gdf
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -196,89 +206,80 @@ def _query_frontera_real(gdf_predio):
 
 def get_aptitud(gdf_predio: gpd.GeoDataFrame, cultivo: str) -> gpd.GeoDataFrame | None:
     """
-    Dado el GeoDataFrame del predio y el cultivo ('café' o 'plátano'),
-    devuelve las zonas de aptitud que intersectan con el predio.
-    Retorna GeoDataFrame con columna aptitud, o None si no hay datos.
+    Devuelve zonas de aptitud que intersectan el predio.
+    Columnas: aptitud, area_ha, pct_predio
     """
-    if USE_REAL_DB and DB_LIBS_OK:
-        try:
-            return _query_aptitud_real(gdf_predio, cultivo)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"❌ Error consultando aptitud: {e}")
-            return None
-    return _query_aptitud_mock(gdf_predio, cultivo)
-
-
-def _query_aptitud_mock(gdf_predio, cultivo):
-    geom = gdf_predio.geometry.iloc[0]
-    return gpd.GeoDataFrame(
-        [{"aptitud": "Alta"}],
-        geometry=[geom], crs="EPSG:4326",
-    )
-
-
-def _query_aptitud_real(gdf_predio, cultivo):
-    tabla = "aptitud_cafe_mvp" if cultivo == "café" else "aptitud_platano_mvp"
     geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
+    area_predio_ha = float(gdf_predio.geometry.iloc[0].area * (111320 ** 2) / 10000)
+    tabla = "aptitud_cafe_mvp" if cultivo == "café" else "aptitud_platano_mvp"
+
     sql = text(f"""
         SELECT
             aptitud,
+            ROUND((ST_Area(
+                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+                ::geography) / 10000)::numeric, 2) AS area_ha,
             ST_AsGeoJSON(
                 ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
             )::json AS geojson
         FROM {tabla}
         WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
     """)
-    with _get_engine().connect() as conn:
-        rows = conn.execute(sql, {"geom": json.dumps(geojson_predio)}).fetchall()
-    if not rows:
-        return None
-    records, geometries = [], []
-    for row in rows:
-        gj = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
-        try:
-            geom = shape(gj)
-            if not geom.is_empty:
-                records.append({"aptitud": row.aptitud})
-                geometries.append(geom)
-        except Exception:
-            continue
-    if not records:
-        return None
-    return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
+
+    gdf = _query_intersection(
+        sql, geojson_predio, ["aptitud", "area_ha"],
+        mock_records=[{"aptitud": "Alta", "area_ha": area_predio_ha}]
+    )
+    if gdf is not None and area_predio_ha > 0:
+        gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
+    return gdf
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  4 · CONSTRUCCIONES
+#  4 · VALOR POTENCIAL (UFH)
+# ════════════════════════════════════════════════════════════════════════════
+
+def get_valor_potencial(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
+    """
+    Devuelve zonas de valor potencial (ufh_mvp) que intersectan el predio.
+    Columnas: clase_ufh, area_ha, pct_predio
+    """
+    geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
+    area_predio_ha = float(gdf_predio.geometry.iloc[0].area * (111320 ** 2) / 10000)
+
+    sql = text("""
+        SELECT
+            clase_ufh,
+            ROUND((ST_Area(
+                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+                ::geography) / 10000)::numeric, 2) AS area_ha,
+            ST_AsGeoJSON(
+                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+            )::json AS geojson
+        FROM ufh_mvp
+        WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+    """)
+
+    gdf = _query_intersection(
+        sql, geojson_predio, ["clase_ufh", "area_ha"],
+        mock_records=[{"clase_ufh": "03", "area_ha": area_predio_ha}]
+    )
+    if gdf is not None and area_predio_ha > 0:
+        gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
+    return gdf
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  5 · CONSTRUCCIONES
 # ════════════════════════════════════════════════════════════════════════════
 
 def get_construcciones(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
     """
-    Dado el GeoDataFrame del predio, devuelve las construcciones
-    que intersectan con él (tabla construcciones_mvp).
-    Retorna GeoDataFrame con columnas tipo_const, numero_pis, o None.
+    Devuelve construcciones que intersectan el predio.
+    Columnas: codigo, tipo_const, numero_pis
     """
-    if USE_REAL_DB and DB_LIBS_OK:
-        try:
-            return _query_construcciones_real(gdf_predio)
-        except Exception as e:
-            import streamlit as st
-            st.error(f"❌ Error consultando construcciones: {e}")
-            return None
-    return _query_construcciones_mock(gdf_predio)
-
-
-def _query_construcciones_mock(gdf_predio):
-    geom = gdf_predio.geometry.iloc[0].centroid.buffer(0.001)
-    return gpd.GeoDataFrame(
-        [{"tipo_const": "Casa", "numero_pis": 1, "codigo": "MOCK001"}],
-        geometry=[geom], crs="EPSG:4326",
-    )
-
-
-def _query_construcciones_real(gdf_predio):
     geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
+
     sql = text("""
         SELECT
             codigo,
@@ -288,24 +289,8 @@ def _query_construcciones_real(gdf_predio):
         FROM construcciones_mvp
         WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
     """)
-    with _get_engine().connect() as conn:
-        rows = conn.execute(sql, {"geom": json.dumps(geojson_predio)}).fetchall()
-    if not rows:
-        return None
-    records, geometries = [], []
-    for row in rows:
-        gj = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
-        try:
-            geom = shape(gj)
-            if not geom.is_empty:
-                records.append({
-                    "codigo":     row.codigo,
-                    "tipo_const": row.tipo_const or "—",
-                    "numero_pis": row.numero_pis or 0,
-                })
-                geometries.append(geom)
-        except Exception:
-            continue
-    if not records:
-        return None
-    return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
+
+    return _query_intersection(
+        sql, geojson_predio, ["codigo", "tipo_const", "numero_pis"],
+        mock_records=[{"codigo": "MOCK001", "tipo_const": "Casa", "numero_pis": 1}]
+    )
