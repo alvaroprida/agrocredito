@@ -181,8 +181,9 @@ def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
     )
     Fullscreen().add_to(m)
 
+    # Usar GeoDataFrame directamente (incluye columna codigo como propiedad)
     folium.GeoJson(
-        data=predio["geojson"],
+        data=gdf.to_json(),
         name="Predio",
         style_function=lambda _: {
             "fillColor":   "#22c55e",
@@ -288,10 +289,8 @@ with tab_inicio:
         st.stop()
 
     # Siempre leer lat/lon desde session_state — nunca desde variables locales
-    lat = st.session_state.get("lat", 0)
-    lon = st.session_state.get("lon", 0)
-    st.write(f"DEBUG lat: {lat} · lon: {lon}")
-    st.write(f"DEBUG analizado: {st.session_state.get('analizado')}")
+    lat = st.session_state["lat"]
+    lon = st.session_state["lon"]
 
     st.markdown("#### 🗺️ Identificación del predio catastral")
 
