@@ -289,9 +289,9 @@ with tab_inicio:
 
     # Siempre leer lat/lon desde session_state — nunca desde variables locales
     lat = st.session_state["lat"]
+    lon = st.session_state["lon"]
     st.write(f"DEBUG lat: {lat} · lon: {lon}")
     st.write(f"DEBUG session_state: {dict(st.session_state)}")
-    lon = st.session_state["lon"]
 
     st.markdown("#### 🗺️ Identificación del predio catastral")
 
