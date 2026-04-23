@@ -173,17 +173,30 @@ def gauge_riesgo(valor_pct, titulo):
 # ── Mapas ─────────────────────────────────────────────────────────────────────
 
 def _get_bounds(gdf_predio):
-    """Devuelve los bounds del predio para fit_bounds de Folium."""
     b = gdf_predio.geometry.iloc[0].bounds
     return [[b[1], b[0]], [b[3], b[2]]]
 
+def _calc_zoom(gdf_predio):
+    """Calcula zoom apropiado según el tamaño del predio."""
+    b = gdf_predio.geometry.iloc[0].bounds
+    max_span = max(b[2] - b[0], b[3] - b[1])
+    if max_span < 0.001:   return 18
+    if max_span < 0.003:   return 17
+    if max_span < 0.007:   return 16
+    if max_span < 0.015:   return 15
+    if max_span < 0.03:    return 14
+    if max_span < 0.07:    return 13
+    return 12
+
 def _base_map(gdf_predio):
-    """Mapa base centrado y ajustado al predio."""
     geom = gdf_predio.geometry.iloc[0]
-    m = folium.Map(location=[geom.centroid.y, geom.centroid.x],
-                   zoom_start=15, tiles="Esri.WorldImagery")
+    zoom = _calc_zoom(gdf_predio)
+    m = folium.Map(
+        location=[geom.centroid.y, geom.centroid.x],
+        zoom_start=zoom,
+        tiles="Esri.WorldImagery",
+    )
     Fullscreen().add_to(m)
-    m.fit_bounds(_get_bounds(gdf_predio))
     return m
 
 def _add_predio(m, gdf_predio):
@@ -198,18 +211,15 @@ def _add_predio(m, gdf_predio):
     ).add_to(m)
 
 def mapa_predio_simple(lat, lon, predio):
-    """Tab Inicio: solo polígono del predio + marker."""
     m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
     folium.Marker([lat, lon], tooltip="Punto ingresado",
                   icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(m)
-    m.fit_bounds(_get_bounds(predio["gdf"]))
     return m
 
 def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
               mostrar_capa=True, estilo_capa_fn=None,
               campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
-    """Tab Eligibilidad: mapa con predio + una capa opcional, siempre zoom al predio."""
     m = _base_map(gdf_predio)
     if mostrar_predio:
         _add_predio(m, gdf_predio)
@@ -222,8 +232,6 @@ def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
                 fields=campos_tooltip or [], aliases=aliases_tooltip or [],
             ) if campos_tooltip else folium.GeoJsonTooltip(fields=[]),
         ).add_to(m)
-    # Siempre re-aplicar al final para garantizar zoom al predio
-    m.fit_bounds(_get_bounds(gdf_predio))
     return m
 
 # ════════════════════════════════════════════════════════════════════════════
