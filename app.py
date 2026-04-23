@@ -465,6 +465,8 @@ with tab_elegibilidad:
             aliases_tooltip=["Aptitud","Área (ha)","% predio"],
             nombre_capa="Aptitud cultivo",
         )
+        bounds = predio["gdf"].geometry.iloc[0].bounds
+        m_b1.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         st_folium(m_b1, width=700, height=380, returned_objects=[], key="map_b1")
 
         if gdf_aptitud is not None and len(gdf_aptitud) > 0:
@@ -499,6 +501,8 @@ with tab_elegibilidad:
             aliases_tooltip=["Clase UFH","Área (ha)","% predio"],
             nombre_capa="Valor potencial",
         )
+        bounds = predio["gdf"].geometry.iloc[0].bounds
+        m_b2.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         st_folium(m_b2, width=700, height=380, returned_objects=[], key="map_b2")
 
         if gdf_vp is not None and len(gdf_vp) > 0:
