@@ -170,20 +170,24 @@ def gauge_riesgo(valor_pct: int, titulo: str):
 def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
     """Mapa con el polígono del predio y el punto ingresado."""
     gdf      = predio["gdf"]
-    centroid = gdf.geometry.iloc[0].centroid
+    geom     = gdf.geometry.iloc[0]
+    centroid = geom.centroid
+    bounds   = geom.bounds  # (minx, miny, maxx, maxy)
+
     m = folium.Map(
         location=[centroid.y, centroid.x],
         zoom_start=15,
         tiles="Esri.WorldImagery",
     )
     Fullscreen().add_to(m)
+
     folium.GeoJson(
-        gdf.__geo_interface__,
+        data=predio["geojson"],
         name="Predio",
         style_function=lambda _: {
-            "fillColor": "#22c55e",
-            "color":     "#16a34a",
-            "weight":    2.5,
+            "fillColor":   "#22c55e",
+            "color":       "#16a34a",
+            "weight":      2.5,
             "fillOpacity": 0.25,
         },
         tooltip=folium.GeoJsonTooltip(
@@ -191,11 +195,16 @@ def mapa_con_poligono(lat: float, lon: float, predio: dict) -> folium.Map:
             aliases=["Código catastral"],
         ),
     ).add_to(m)
+
     folium.Marker(
         [lat, lon],
         tooltip="Punto ingresado",
         icon=folium.Icon(color="red", icon="map-marker", prefix="fa"),
     ).add_to(m)
+
+    # Ajustar zoom al bbox del polígono
+    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+
     return m
 
 def mapa_simple(lat: float, lon: float, zoom: int = 13) -> folium.Map:
