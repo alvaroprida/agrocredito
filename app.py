@@ -180,7 +180,7 @@ def _base_map(gdf_predio):
                    zoom_start=15, tiles="Esri.WorldImagery")
     Fullscreen().add_to(m)
     m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-    return m
+    return m, bounds
 
 def _add_predio(m, gdf_predio):
     folium.GeoJson(
@@ -195,17 +195,18 @@ def _add_predio(m, gdf_predio):
 
 def mapa_predio_simple(lat, lon, predio):
     """Tab Inicio: solo polígono del predio + marker."""
-    m = _base_map(predio["gdf"])
+    m, bounds = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
     folium.Marker([lat, lon], tooltip="Punto ingresado",
                   icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(m)
+    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     return m
 
 def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
               mostrar_capa=True, estilo_capa_fn=None,
               campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
     """Tab Eligibilidad: mapa con predio + una capa opcional."""
-    m = _base_map(gdf_predio)
+    m, bounds = _base_map(gdf_predio)
     if mostrar_predio:
         _add_predio(m, gdf_predio)
     if mostrar_capa and gdf_capa is not None and len(gdf_capa) > 0:
@@ -217,6 +218,8 @@ def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
                 fields=campos_tooltip or [], aliases=aliases_tooltip or [],
             ) if campos_tooltip else folium.GeoJsonTooltip(fields=[]),
         ).add_to(m)
+    # Siempre re-aplicar fit_bounds al final para garantizar el zoom correcto
+    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     return m
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -338,7 +341,7 @@ with tab_elegibilidad:
         area_total = predio.get("area_ha", slope["area_total_ha"])
 
         # Mapa simulado (polígono predio + zonas hardcoded)
-        m_a1 = _base_map(predio["gdf"])
+        m_a1 = _base_map(predio["gdf"])[0]
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
         if ver_pendiente:
@@ -361,6 +364,10 @@ with tab_elegibilidad:
                                style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
                                                           "weight":1,"fillOpacity":0.5},
                                tooltip="NDVI < 0.40").add_to(m_a1)
+
+        # Re-aplicar fit_bounds al final
+        bounds = predio["gdf"].geometry.iloc[0].bounds
+        m_a1.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
