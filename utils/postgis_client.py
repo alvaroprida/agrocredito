@@ -25,7 +25,7 @@ except ImportError:
 
 # ── Configuración ────────────────────────────────────────────────────────────
 # Cambia a True cuando tengas la BD accesible (Supabase, ngrok, etc.)
-USE_REAL_DB = True
+USE_REAL_DB = False
 
 # ── Conexión ─────────────────────────────────────────────────────────────────
 
@@ -107,16 +107,13 @@ def get_predio_por_punto(lat: float, lon: float) -> dict | None:
 
     Retorna None si no se encuentra ningún predio.
     """
-    import streamlit as st
-    st.write(f"DEBUG — USE_REAL_DB: {USE_REAL_DB} · DB_LIBS_OK: {DB_LIBS_OK} · lat: {lat} · lon: {lon}")
     if USE_REAL_DB and DB_LIBS_OK:
         try:
-            result = _query_real(lat, lon)
-            st.write(f"DEBUG — resultado real: {result['codigo'] if result else 'None'}")
-            return result
+            return _query_real(lat, lon)
         except Exception as e:
-            st.error(f"❌ Error en _query_real: {e}")
-            return _query_mock(lat, lon)
+            import streamlit as st
+            st.error(f"❌ Error consultando PostGIS: {e}")
+            return None
     else:
         return _query_mock(lat, lon)
 
