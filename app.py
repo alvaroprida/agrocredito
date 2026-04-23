@@ -263,8 +263,8 @@ with tab_inicio:
                                   "cultivo": d["cultivo"], "analizado": True})
     else:
         c1, c2, c3 = st.columns(3)
-        with c1: lat_input = st.number_input("Latitud",  value=4.2433, format="%.6f")
-        with c2: lon_input = st.number_input("Longitud", value=-74.0276, format="%.6f")
+        with c1: lat_input = st.number_input("Latitud",  value=4.21640,  format="%.6f")
+        with c2: lon_input = st.number_input("Longitud", value=-73.97898, format="%.6f")
         with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
 
         if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
