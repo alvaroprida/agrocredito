@@ -342,12 +342,11 @@ with tab_elegibilidad:
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
         if ver_pendiente:
-            # Zona simulada: buffer interior al 20% del predio
             geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
             if not geom_pend.is_empty:
-                import geopandas as gpd2
-                gdf_pend = gpd.GeoDataFrame([{"tipo":"No cultivable"}],
-                                             geometry=[geom_pend], crs="EPSG:4326")
+                import geopandas as _gpd
+                gdf_pend = _gpd.GeoDataFrame([{"tipo":"No cultivable"}],
+                                              geometry=[geom_pend], crs="EPSG:4326")
                 folium.GeoJson(data=gdf_pend.to_json(),
                                style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
                                                           "weight":1,"fillOpacity":0.5},
@@ -355,8 +354,9 @@ with tab_elegibilidad:
         if ver_ndvi_bajo:
             geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
             if not geom_ndvi.is_empty:
-                gdf_ndvi = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
-                                             geometry=[geom_ndvi], crs="EPSG:4326")
+                import geopandas as _gpd
+                gdf_ndvi = _gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
+                                              geometry=[geom_ndvi], crs="EPSG:4326")
                 folium.GeoJson(data=gdf_ndvi.to_json(),
                                style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
                                                           "weight":1,"fillOpacity":0.5},
