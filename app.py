@@ -172,15 +172,19 @@ def gauge_riesgo(valor_pct, titulo):
 
 # ── Mapas ─────────────────────────────────────────────────────────────────────
 
+def _get_bounds(gdf_predio):
+    """Devuelve los bounds del predio para fit_bounds de Folium."""
+    b = gdf_predio.geometry.iloc[0].bounds
+    return [[b[1], b[0]], [b[3], b[2]]]
+
 def _base_map(gdf_predio):
     """Mapa base centrado y ajustado al predio."""
-    geom   = gdf_predio.geometry.iloc[0]
-    bounds = geom.bounds
+    geom = gdf_predio.geometry.iloc[0]
     m = folium.Map(location=[geom.centroid.y, geom.centroid.x],
                    zoom_start=15, tiles="Esri.WorldImagery")
     Fullscreen().add_to(m)
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-    return m, bounds
+    m.fit_bounds(_get_bounds(gdf_predio))
+    return m
 
 def _add_predio(m, gdf_predio):
     folium.GeoJson(
@@ -195,18 +199,18 @@ def _add_predio(m, gdf_predio):
 
 def mapa_predio_simple(lat, lon, predio):
     """Tab Inicio: solo polígono del predio + marker."""
-    m, bounds = _base_map(predio["gdf"])
+    m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
     folium.Marker([lat, lon], tooltip="Punto ingresado",
                   icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(m)
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    m.fit_bounds(_get_bounds(predio["gdf"]))
     return m
 
 def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
               mostrar_capa=True, estilo_capa_fn=None,
               campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
-    """Tab Eligibilidad: mapa con predio + una capa opcional."""
-    m, bounds = _base_map(gdf_predio)
+    """Tab Eligibilidad: mapa con predio + una capa opcional, siempre zoom al predio."""
+    m = _base_map(gdf_predio)
     if mostrar_predio:
         _add_predio(m, gdf_predio)
     if mostrar_capa and gdf_capa is not None and len(gdf_capa) > 0:
@@ -218,8 +222,8 @@ def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
                 fields=campos_tooltip or [], aliases=aliases_tooltip or [],
             ) if campos_tooltip else folium.GeoJsonTooltip(fields=[]),
         ).add_to(m)
-    # Siempre re-aplicar fit_bounds al final para garantizar el zoom correcto
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    # Siempre re-aplicar al final para garantizar zoom al predio
+    m.fit_bounds(_get_bounds(gdf_predio))
     return m
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -341,7 +345,7 @@ with tab_elegibilidad:
         area_total = predio.get("area_ha", slope["area_total_ha"])
 
         # Mapa simulado (polígono predio + zonas hardcoded)
-        m_a1 = _base_map(predio["gdf"])[0]
+        m_a1 = _base_map(predio["gdf"])
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
         if ver_pendiente:
@@ -465,8 +469,6 @@ with tab_elegibilidad:
             aliases_tooltip=["Aptitud","Área (ha)","% predio"],
             nombre_capa="Aptitud cultivo",
         )
-        bounds = predio["gdf"].geometry.iloc[0].bounds
-        m_b1.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         st_folium(m_b1, width=700, height=380, returned_objects=[], key="map_b1")
 
         if gdf_aptitud is not None and len(gdf_aptitud) > 0:
@@ -501,8 +503,6 @@ with tab_elegibilidad:
             aliases_tooltip=["Clase UFH","Área (ha)","% predio"],
             nombre_capa="Valor potencial",
         )
-        bounds = predio["gdf"].geometry.iloc[0].bounds
-        m_b2.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         st_folium(m_b2, width=700, height=380, returned_objects=[], key="map_b2")
 
         if gdf_vp is not None and len(gdf_vp) > 0:
