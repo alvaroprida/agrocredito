@@ -510,9 +510,6 @@ with tab_elegibilidad:
             area_const_real = float(gdf_const["area_ha"].sum())
             kpi("Área total construida", f"{area_const_real:.4f}", "ha")
 
-            area_const_real = float(gdf_const["area_ha"].sum())
-            kpi("Área total construida", f"{area_const_real:.4f}", "ha")
-
             # Mapa construcciones
             col1, col2 = st.columns(2)
             with col1: ver_predio_c = st.checkbox("🟢 Predio",         value=True, key="c_predio")
