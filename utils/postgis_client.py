@@ -278,22 +278,62 @@ def get_valor_potencial(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None
 
 def get_construcciones(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
     """
-    Devuelve construcciones que intersectan el predio.
-    Columnas: codigo, tipo_const, numero_pis
+    Devuelve construcciones del predio via JOIN predios_mvp.codigo = construcciones_mvp.terreno_co.
+    Columnas: codigo, identifica, tipo_const, numero_pis, area_ha
     """
-    geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
+    if USE_REAL_DB and DB_LIBS_OK:
+        try:
+            return _query_construcciones_real(gdf_predio)
+        except Exception as e:
+            import streamlit as st
+            st.error(f"❌ Error consultando construcciones: {e}")
+            return None
+    return _query_construcciones_mock(gdf_predio)
 
+
+def _query_construcciones_mock(gdf_predio):
+    geom = gdf_predio.geometry.iloc[0].centroid.buffer(0.001)
+    return gpd.GeoDataFrame(
+        [{"codigo": "MOCK001", "identifica": "Casa principal",
+          "tipo_const": "Casa", "numero_pis": 1, "area_ha": 0.02}],
+        geometry=[geom], crs="EPSG:4326",
+    )
+
+
+def _query_construcciones_real(gdf_predio):
+    codigo_predio = gdf_predio["codigo"].iloc[0]
     sql = text("""
         SELECT
-            codigo,
-            tipo_const,
-            numero_pis,
-            ST_AsGeoJSON(geom)::json AS geojson
-        FROM construcciones_mvp
-        WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
+            c.codigo,
+            c.identifica,
+            c.tipo_const,
+            c.numero_pis,
+            ROUND((ST_Area(c.geom::geography) / 10000)::numeric, 6) AS area_ha,
+            ST_AsGeoJSON(c.geom)::json AS geojson
+        FROM construcciones_mvp c
+        JOIN predios_mvp p ON c.terreno_co = p.codigo
+        WHERE p.codigo = :codigo
     """)
-
-    return _query_intersection(
-        sql, geojson_predio, ["codigo", "tipo_const", "numero_pis"],
-        mock_records=[{"codigo": "MOCK001", "tipo_const": "Casa", "numero_pis": 1}]
-    )
+    with _get_engine().connect() as conn:
+        rows = conn.execute(sql, {"codigo": codigo_predio}).fetchall()
+    if not rows:
+        return None
+    records, geometries = [], []
+    for row in rows:
+        gj = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
+        try:
+            geom = shape(gj)
+            if not geom.is_empty:
+                records.append({
+                    "codigo":     row.codigo or "—",
+                    "identifica": row.identifica or "—",
+                    "tipo_const": row.tipo_const or "—",
+                    "numero_pis": int(row.numero_pis) if row.numero_pis else 0,
+                    "area_ha":    float(row.area_ha) if row.area_ha else 0.0,
+                })
+                geometries.append(geom)
+        except Exception:
+            continue
+    if not records:
+        return None
+    return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
