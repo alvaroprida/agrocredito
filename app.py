@@ -391,10 +391,11 @@ with tab_elegibilidad:
 
         slope_threshold_pct = st.slider(
             "Umbral de pendiente no cultivable (%)",
-            min_value=5, max_value=50, value=15, step=1,
+            min_value=3, max_value=75, value=25, step=1,
             key="slope_threshold",
         )
-        slope_threshold = float(np.degrees(np.arctan(slope_threshold_pct / 100)))
+        # Pendiente ya viene en % desde eosda_terrain
+        slope_threshold = float(slope_threshold_pct)
 
         if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
             st.session_state["terrain"] = None
@@ -418,7 +419,7 @@ with tab_elegibilidad:
             with c1: kpi("Elevación mínima",  f"{s['elev_min']:.0f}",   "m")
             with c2: kpi("Elevación media",   f"{s['elev_mean']:.0f}",  "m")
             with c3: kpi("Elevación máxima",  f"{s['elev_max']:.0f}",   "m")
-            with c4: kpi("Pendiente media",   f"{s['slope_mean']:.1f}", "°")
+            with c4: kpi("Pendiente media",   f"{s['slope_mean']:.1f}", "%")
             with c5: kpi("Aspecto dominante", s["aspect_dominant"])
 
             st.markdown("---")
@@ -442,9 +443,9 @@ with tab_elegibilidad:
                 st_folium(maps["slope_map"], width=420, height=340,
                           returned_objects=[], key="map_slope")
                 st.markdown(_colorscale_bar(
-                    "Pendiente", units="grados",
+                    "Pendiente", units="%",
                     colors=["#1a9850","#91cf60","#d9ef8b","#fee08b","#fc8d59","#d73027"],
-                    ticks=["0°","6°","12°","18°","24°","30°+"],
+                    ticks=["0%","10%","20%","30%","40%","50%+"],
                 ), unsafe_allow_html=True)
 
             c3, c4 = st.columns(2)

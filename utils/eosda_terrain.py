@@ -131,7 +131,7 @@ def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key: str):
 
         with rasterio.open(mosaic_path) as src:
             clipped, clipped_transform = mask(src, geoms, crop=True, nodata=np.nan)
-            crs = src.crs
+            crs = src.crs  # EPSG:3857 — proyectado en metros
 
         dem = clipped[0].astype("float32")
 
@@ -149,11 +149,14 @@ def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key: str):
 # ── Cálculo slope / aspect ────────────────────────────────────────────────────
 
 def _get_res_meters(transform, crs, shape):
+    """Resolución en metros. Para EPSG:3857 usa directamente las unidades del transform."""
     if crs and hasattr(crs, "is_geographic") and crs.is_geographic:
+        # CRS geográfico (grados) → convertir a metros
         lat_c = transform.f + transform.e * shape[0] / 2
         res_y = abs(transform.e) * 111320
         res_x = abs(transform.a) * 111320 * np.cos(np.radians(lat_c))
     else:
+        # CRS proyectado (metros) → usar directamente
         res_x = abs(transform.a)
         res_y = abs(transform.e)
     return res_x, res_y
@@ -161,9 +164,10 @@ def _get_res_meters(transform, crs, shape):
 def _calc_slope(dem, transform, crs):
     res_x, res_y = _get_res_meters(transform, crs, dem.shape)
     dz_dy, dz_dx = np.gradient(dem, res_y, res_x)
-    slope = np.degrees(np.arctan(np.sqrt(dz_dx**2 + dz_dy**2)))
-    slope[np.isnan(dem)] = np.nan
-    return slope
+    # Pendiente en % (rise/run * 100)
+    slope_pct = np.sqrt(dz_dx**2 + dz_dy**2) * 100
+    slope_pct[np.isnan(dem)] = np.nan
+    return slope_pct
 
 def _calc_aspect(dem, transform, crs):
     res_x, res_y = _get_res_meters(transform, crs, dem.shape)
@@ -267,7 +271,7 @@ def build_terrain_maps(gdf_predio: gpd.GeoDataFrame, terrain: dict) -> dict:
 
     # ── Slope ─────────────────────────────────────────────────────────────
     slope_map = _base(center)
-    png_slope = _array_to_png_b64(slope, "RdYlGn_r", vmin=0, vmax=30)
+    png_slope = _array_to_png_b64(slope, "RdYlGn_r", vmin=0, vmax=50)
     folium.raster_layers.ImageOverlay(
         image=png_slope, bounds=bx, opacity=0.75, name="Pendiente",
     ).add_to(slope_map)
@@ -327,9 +331,11 @@ def get_terrain_analysis(gdf_predio: gpd.GeoDataFrame,
     area_cultivable_ha = cultivable_mask.sum() * pixel_area_ha
     pct_cultivable     = area_cultivable_ha / area_total_ha * 100 if area_total_ha > 0 else 0
 
-    breaks = [0, 5, 15, 30, 45, 90]
-    labels = ["Plana (0–5°)","Suave (5–15°)","Moderada (15–30°)",
-              "Fuerte (30–45°)","Muy fuerte (>45°)"]
+    # Clases de pendiente colombianas (IGAC) en %
+    breaks = [0, 3, 7, 12, 25, 50, 9999]
+    labels = ["Plana (0–3%)","Ligeramente ondulada (3–7%)",
+              "Ondulada (7–12%)","Quebrada (12–25%)",
+              "Fuertemente quebrada (25–50%)","Escarpada (>50%)"]
     slope_v = slope[valid_mask]
     slope_classes = {
         labels[i]: float(np.sum((slope_v >= breaks[i]) & (slope_v < breaks[i+1])) / len(slope_v) * 100)
