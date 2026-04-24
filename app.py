@@ -173,17 +173,6 @@ def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> s
         f'<div style="display:flex;margin-top:2px">{tick_html}</div>'
         f'</div>'
     )
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=valor_pct,
-        title={"text": titulo, "font": {"size": 13}},
-        gauge={"axis":{"range":[0,100]},"bar":{"color":"#3b82f6"},
-               "steps":[{"range":[0,33],"color":"#d1fae5"},
-                        {"range":[33,66],"color":"#fef3c7"},
-                        {"range":[66,100],"color":"#fee2e2"}]},
-        number={"suffix":"%"},
-    ))
-    fig.update_layout(height=200, margin=dict(t=40,b=10,l=10,r=10))
-    return fig
 
 # ── Mapas ─────────────────────────────────────────────────────────────────────
 
@@ -395,76 +384,16 @@ with tab_elegibilidad:
 
     # ── A2 · Área Efectiva Cultivable ─────────────────────────────────────
     with st.expander("📏 A2 · Área Efectiva Cultivable", expanded=True):
-        st.caption("NDVI y Construcciones hardcoded · Se conectará en la próxima versión")
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",        value=True, key="a1_predio")
-        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >15°", value=True, key="a1_pend")
-        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo",      value=True, key="a1_ndvi")
-        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones", value=True, key="a1_const")
-
-        area_total = predio.get("area_ha", d["area_total_ha"])
-        m_a1 = _base_map(predio["gdf"])
-        if ver_predio_a1:
-            _add_predio(m_a1, predio["gdf"])
-        if ver_pendiente:
-            geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
-            if not geom_pend.is_empty:
-                gdf_pend = gpd.GeoDataFrame([{"tipo":"No cultivable"}],
-                                             geometry=[geom_pend], crs="EPSG:4326")
-                folium.GeoJson(data=gdf_pend.to_json(),
-                               style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
-                                                          "weight":1,"fillOpacity":0.5},
-                               tooltip="Pendiente >15°").add_to(m_a1)
-        if ver_ndvi_bajo:
-            geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
-            if not geom_ndvi.is_empty:
-                gdf_ndvi = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
-                                             geometry=[geom_ndvi], crs="EPSG:4326")
-                folium.GeoJson(data=gdf_ndvi.to_json(),
-                               style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
-                                                          "weight":1,"fillOpacity":0.5},
-                               tooltip="NDVI < 0.40").add_to(m_a1)
-        _fit(m_a1, predio["gdf"])
-        st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
-
-        # ── Tabla área efectiva — resultado principal ──────────────────
-        st.markdown("---")
-        st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
-        area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
-        area_ndvi  = d["area_ndvi_bajo_ha"]
-        area_const = d["area_construcciones_ha"]
-        area_ef    = round(area_total - area_pend - area_ndvi - area_const, 2)
-        pct_ef     = round(area_ef / area_total * 100) if area_total > 0 else 0
-
-        c_left, c_right = st.columns([2, 1])
-        with c_left:
-            df_area = pd.DataFrame({
-                "Componente": ["Área total del predio","− Pendiente >umbral",
-                               "− NDVI bajo umbral","− Construcciones",
-                               "✅ Área efectiva cultivable"],
-                "Hectáreas":  [area_total, -area_pend, -area_ndvi, -area_const, area_ef],
-            })
-            st.dataframe(
-                df_area.style.apply(
-                    lambda x: ["font-weight:bold;background:#d1fae5" if "✅" in str(v) else "" for v in x],
-                    axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        with c_right:
-            st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
-            kpi("Área efectiva", area_ef, "ha")
-
-    # ── A2a · Análisis del Terreno ────────────────────────────────────────
-    with st.expander("🏔️ A2-A · Análisis del Terreno (EOSDA API)", expanded=False):
-        st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva anterior.")
+        # ── A2-A · Análisis del Terreno ───────────────────────────────────
+        st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
+        st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
 
         slope_threshold_pct = st.slider(
             "Umbral de pendiente no cultivable (%)",
             min_value=5, max_value=50, value=15, step=1,
             key="slope_threshold",
         )
-        # Convertir % a grados para el cálculo (tan(θ) = pendiente%)
         slope_threshold = float(np.degrees(np.arctan(slope_threshold_pct / 100)))
 
         if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
@@ -499,64 +428,50 @@ with tab_elegibilidad:
                 st.markdown("**🏔️ Elevación (DEM)**")
                 st_folium(maps["dem_map"], width=420, height=340,
                           returned_objects=[], key="map_dem")
-                st.plotly_chart(
-                    go.Figure(go.Heatmap(
-                        z=[[s["elev_min"], s["elev_max"]]],
-                        colorscale="Earth", showscale=True,
-                        colorbar=dict(title="m s.n.m.", thickness=12, len=0.6),
-                        opacity=0,
-                    )).update_layout(
-                        height=60, margin=dict(t=0,b=0,l=0,r=80),
-                        xaxis=dict(visible=False), yaxis=dict(visible=False),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    ), use_container_width=True, key="scale_dem",
-                )
+                st.markdown(_colorscale_bar(
+                    "Elevación", units="m s.n.m.",
+                    colors=["#006837","#1a9850","#66bd63","#d9ef8b",
+                            "#fee08b","#fdae61","#f46d43","#a50026"],
+                    ticks=[f"{s['elev_min']:.0f}m",
+                           f"{s['elev_min']+(s['elev_max']-s['elev_min'])*0.33:.0f}m",
+                           f"{s['elev_min']+(s['elev_max']-s['elev_min'])*0.66:.0f}m",
+                           f"{s['elev_max']:.0f}m"],
+                ), unsafe_allow_html=True)
             with c2:
                 st.markdown("**📐 Pendiente (Slope)**")
                 st_folium(maps["slope_map"], width=420, height=340,
                           returned_objects=[], key="map_slope")
-                st.plotly_chart(
-                    go.Figure(go.Heatmap(
-                        z=[[0, 30]], colorscale="RdYlGn_r", showscale=True,
-                        colorbar=dict(title="Grados °", thickness=12, len=0.6),
-                        opacity=0,
-                    )).update_layout(
-                        height=60, margin=dict(t=0,b=0,l=0,r=80),
-                        xaxis=dict(visible=False), yaxis=dict(visible=False),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    ), use_container_width=True, key="scale_slope",
-                )
+                st.markdown(_colorscale_bar(
+                    "Pendiente", units="grados",
+                    colors=["#1a9850","#91cf60","#d9ef8b","#fee08b","#fc8d59","#d73027"],
+                    ticks=["0°","6°","12°","18°","24°","30°+"],
+                ), unsafe_allow_html=True)
 
             c3, c4 = st.columns(2)
             with c3:
                 st.markdown("**🧭 Aspecto (Orientación)**")
                 st_folium(maps["aspect_map"], width=420, height=340,
                           returned_objects=[], key="map_aspect")
-                st.plotly_chart(
-                    go.Figure(go.Heatmap(
-                        z=[[0, 360]], colorscale="HSV", showscale=True,
-                        colorbar=dict(title="Orientación", thickness=12, len=0.6,
-                                      tickvals=[0,90,180,270,360],
-                                      ticktext=["N","E","S","O","N"]),
-                        opacity=0,
-                    )).update_layout(
-                        height=60, margin=dict(t=0,b=0,l=0,r=80),
-                        xaxis=dict(visible=False), yaxis=dict(visible=False),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    ), use_container_width=True, key="scale_aspect",
-                )
+                st.markdown(_colorscale_bar(
+                    "Orientación", units="",
+                    colors=["#ff0000","#ff8800","#ffff00","#00cc00",
+                            "#0000ff","#8800ff","#ff0088","#ff0000"],
+                    ticks=["N","NE","E","SE","S","SO","O","NO","N"],
+                ), unsafe_allow_html=True)
             with c4:
-                st.caption(f"🌱 Zona cultivable (pendiente < {slope_threshold_pct}%)")
+                st.markdown(f"**🌱 Zona cultivable (pendiente < {slope_threshold_pct}%)**")
                 st_folium(maps["cultiv_map"], width=420, height=340,
                           returned_objects=[], key="map_cultiv")
                 st.markdown(
-                    '<div style="display:flex;gap:1.5rem;margin-top:4px">'
-                    '<span style="background:#16a34a;padding:3px 10px;border-radius:4px;color:white;font-size:0.82rem">🟢 Cultivable</span>'
-                    '<span style="background:#dc2626;padding:3px 10px;border-radius:4px;color:white;font-size:0.82rem">🔴 No cultivable</span>'
+                    '<div style="display:flex;gap:1.5rem;margin-top:8px">'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#16a34a"></div>'
+                    f'<span style="font-size:0.82rem">Cultivable · {s["area_cultivable_ha"]} ha ({s["pct_cultivable"]}%)</span></div>'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#dc2626"></div>'
+                    f'<span style="font-size:0.82rem">No cultivable · {s["area_no_cultivable_ha"]} ha ({100-s["pct_cultivable"]:.1f}%)</span></div>'
                     '</div>', unsafe_allow_html=True,
                 )
-                kpi(f"Área cultivable (<{slope_threshold_pct}%)",
-                    f"{s['area_cultivable_ha']} ha", f"({s['pct_cultivable']}%)")
 
             st.markdown("---")
             st.markdown("**Distribución de clases de pendiente**")
@@ -574,6 +489,66 @@ with tab_elegibilidad:
             )
             st.plotly_chart(fig_cls, use_container_width=True)
             st.session_state["area_pendiente_excluida_ha"] = s["area_no_cultivable_ha"]
+
+        # ── Resultado: Área Efectiva Cultivable ───────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
+        st.caption("NDVI y Construcciones hardcoded · Se conectará en la próxima versión")
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",        value=True, key="a1_predio")
+        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >15°", value=True, key="a1_pend")
+        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo",      value=True, key="a1_ndvi")
+        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones", value=True, key="a1_const")
+
+        area_total = predio.get("area_ha", d["area_total_ha"])
+        m_a1 = _base_map(predio["gdf"])
+        if ver_predio_a1:
+            _add_predio(m_a1, predio["gdf"])
+        if ver_pendiente:
+            geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
+            if not geom_pend.is_empty:
+                gdf_pend = gpd.GeoDataFrame([{"tipo":"No cultivable"}],
+                                             geometry=[geom_pend], crs="EPSG:4326")
+                folium.GeoJson(data=gdf_pend.to_json(),
+                               style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
+                                                          "weight":1,"fillOpacity":0.5},
+                               tooltip="Pendiente >15°").add_to(m_a1)
+        if ver_ndvi_bajo:
+            geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
+            if not geom_ndvi.is_empty:
+                gdf_ndvi = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
+                                             geometry=[geom_ndvi], crs="EPSG:4326")
+                folium.GeoJson(data=gdf_ndvi.to_json(),
+                               style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
+                                                          "weight":1,"fillOpacity":0.5},
+                               tooltip="NDVI < 0.40").add_to(m_a1)
+        _fit(m_a1, predio["gdf"])
+        st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
+
+        area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
+        area_ndvi  = d["area_ndvi_bajo_ha"]
+        area_const = d["area_construcciones_ha"]
+        area_ef    = round(area_total - area_pend - area_ndvi - area_const, 2)
+        pct_ef     = round(area_ef / area_total * 100) if area_total > 0 else 0
+
+        c_left, c_right = st.columns([2, 1])
+        with c_left:
+            df_area = pd.DataFrame({
+                "Componente": ["Área total del predio","− Pendiente >umbral",
+                               "− NDVI bajo umbral","− Construcciones",
+                               "✅ Área efectiva cultivable"],
+                "Hectáreas":  [area_total, -area_pend, -area_ndvi, -area_const, area_ef],
+            })
+            st.dataframe(
+                df_area.style.apply(
+                    lambda x: ["font-weight:bold;background:#d1fae5" if "✅" in str(v) else "" for v in x],
+                    axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        with c_right:
+            st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
+            kpi("Área efectiva", area_ef, "ha")
 
     # ════════════════════════════════════════════════════════════════════
     #  B · VALIDACIÓN CONTINUIDAD PRODUCTIVA
