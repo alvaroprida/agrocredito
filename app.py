@@ -493,6 +493,44 @@ with tab_elegibilidad:
 
         # ── Resultado: Área Efectiva Cultivable ───────────────────────────
         st.markdown("---")
+        st.markdown("#### 🏗️ A2-B · Análisis de Construcciones")
+
+        with st.spinner("Cargando construcciones..."):
+            gdf_const = get_construcciones(predio["gdf"])
+        st.session_state["gdf_construcciones"] = gdf_const
+
+        if gdf_const is None or len(gdf_const) == 0:
+            st.info("No se han identificado construcciones dentro del predio en el catastro.")
+            area_const_real = 0.0
+        else:
+            # Tabla de construcciones
+            df_const = gdf_const[["identifica","tipo_const","numero_pis","area_ha"]].copy()
+            df_const.columns = ["Identificación","Tipo","Pisos","Área (ha)"]
+            st.dataframe(df_const, use_container_width=True, hide_index=True)
+
+            area_const_real = float(gdf_const["area_ha"].sum())
+            kpi("Área total construida", f"{area_const_real:.4f}", "ha")
+
+            # Mapa construcciones
+            col1, col2 = st.columns(2)
+            with col1: ver_predio_c = st.checkbox("🟢 Predio",         value=True, key="c_predio")
+            with col2: ver_const_c  = st.checkbox("🟠 Construcciones", value=True, key="c_const")
+
+            m_c = mapa_capa(
+                predio["gdf"], gdf_const,
+                mostrar_predio=ver_predio_c, mostrar_capa=ver_const_c,
+                estilo_capa_fn=lambda _: {"fillColor":"#f97316","color":"#ea580c",
+                                           "weight":1.5,"fillOpacity":0.70},
+                campos_tooltip=["identifica","tipo_const","area_ha"],
+                aliases_tooltip=["Identificación","Tipo","Área (ha)"],
+                nombre_capa="Construcciones",
+            )
+            st_folium(m_c, width=700, height=350, returned_objects=[], key="map_const")
+
+        # Guardamos para la tabla de área efectiva
+        st.session_state["area_construcciones_ha"] = area_const_real if gdf_const is not None else 0.0
+
+        st.markdown("---")
         st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
         st.caption("NDVI y Construcciones hardcoded · Se conectará en la próxima versión")
 
@@ -529,7 +567,7 @@ with tab_elegibilidad:
 
         area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
         area_ndvi  = d["area_ndvi_bajo_ha"]
-        area_const = d["area_construcciones_ha"]
+        area_const = st.session_state.get("area_construcciones_ha", d["area_construcciones_ha"])
         area_ef    = round(area_total - area_pend - area_ndvi - area_const, 2)
         pct_ef     = round(area_ef / area_total * 100) if area_total > 0 else 0
 
