@@ -25,6 +25,7 @@ from utils.postgis_client import (
     get_valor_potencial,
     get_construcciones,
 )
+from utils.eosda_terrain import get_terrain_analysis
 
 # ── Configuración de página ──────────────────────────────────────────────────
 st.set_page_config(
