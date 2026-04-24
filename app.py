@@ -27,6 +27,7 @@ from utils.postgis_client import (
     get_construcciones,
 )
 from utils.eosda_terrain import get_terrain_analysis
+from utils.eosda_ndvi    import get_ndvi_analysis
 
 # ── Configuración de página ──────────────────────────────────────────────────
 st.set_page_config(
@@ -573,15 +574,28 @@ with tab_elegibilidad:
         c_left, c_right = st.columns([2, 1])
         with c_left:
             df_area = pd.DataFrame({
-                "Componente": ["Área total del predio","− Pendiente >umbral",
-                               "− NDVI bajo umbral","− Construcciones",
-                               "✅ Área efectiva cultivable"],
-                "Hectáreas":  [area_total, -area_pend, -area_ndvi, -area_const, area_ef],
+                "Componente": [
+                    "Área total del predio",
+                    f"− Pendiente >{slope_threshold_pct}% (excluida)",
+                    f"− NDVI < {ndvi_threshold} (excluida)",
+                    "− Construcciones (excluida)",
+                    f"  ↳ Solapamiento evitado ({metodo})",
+                    "✅ Área efectiva cultivable",
+                ],
+                "Hectáreas": [
+                    area_total,
+                    -area_pend,
+                    -area_ndvi,
+                    -area_const,
+                    round(area_pend + area_ndvi + area_const - area_excluida, 3),
+                    area_ef,
+                ],
             })
             st.dataframe(
                 df_area.style.apply(
-                    lambda x: ["font-weight:bold;background:#d1fae5" if "✅" in str(v) else "" for v in x],
-                    axis=1),
+                    lambda x: ["font-weight:bold;background:#d1fae5" if "✅" in str(v) else
+                               "color:#64748b;font-style:italic" if "↳" in str(v) else ""
+                               for v in x], axis=1),
                 use_container_width=True, hide_index=True,
             )
         with c_right:
