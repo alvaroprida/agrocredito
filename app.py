@@ -142,6 +142,19 @@ def kpi(label, valor, unidad=""):
         unsafe_allow_html=True,
     )
 
+def gauge_riesgo(valor_pct, titulo):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=valor_pct,
+        title={"text": titulo, "font": {"size": 13}},
+        gauge={"axis":{"range":[0,100]},"bar":{"color":"#3b82f6"},
+               "steps":[{"range":[0,33],"color":"#d1fae5"},
+                        {"range":[33,66],"color":"#fef3c7"},
+                        {"range":[66,100],"color":"#fee2e2"}]},
+        number={"suffix":"%"},
+    ))
+    fig.update_layout(height=200, margin=dict(t=40,b=10,l=10,r=10))
+    return fig
+
 def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> str:
     """Genera una barra de color HTML con etiquetas."""
     gradient = ", ".join(colors)
