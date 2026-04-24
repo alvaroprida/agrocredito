@@ -142,7 +142,20 @@ def kpi(label, valor, unidad=""):
         unsafe_allow_html=True,
     )
 
-def gauge_riesgo(valor_pct, titulo):
+def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> str:
+    """Genera una barra de color HTML con etiquetas."""
+    gradient = ", ".join(colors)
+    tick_html = "".join(
+        f'<span style="flex:1;text-align:center;font-size:0.75rem;color:#475569">{t}</span>'
+        for t in ticks
+    )
+    return f"""
+    <div style="margin:4px 0 12px 0">
+      <div style="font-size:0.78rem;color:#64748b;margin-bottom:3px">{label} {units}</div>
+      <div style="height:14px;border-radius:4px;background:linear-gradient(to right,{gradient})"></div>
+      <div style="display:flex;margin-top:2px">{tick_html}</div>
+    </div>
+    """
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=valor_pct,
         title={"text": titulo, "font": {"size": 13}},
@@ -415,15 +428,17 @@ with tab_elegibilidad:
             st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
             kpi("Área efectiva", area_ef, "ha")
 
-    # ── A2b · Análisis del Terreno (detalle técnico) ───────────────────────
-    with st.expander("🏔️ Detalle: Análisis del Terreno (EOSDA API)", expanded=False):
+    # ── A2a · Análisis del Terreno ────────────────────────────────────────
+    with st.expander("🏔️ A2-A · Análisis del Terreno (EOSDA API)", expanded=False):
         st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva anterior.")
 
-        slope_threshold = st.slider(
-            "Umbral de pendiente no cultivable (°)",
-            min_value=5, max_value=30, value=15, step=1,
+        slope_threshold_pct = st.slider(
+            "Umbral de pendiente no cultivable (%)",
+            min_value=5, max_value=50, value=15, step=1,
             key="slope_threshold",
         )
+        # Convertir % a grados para el cálculo (tan(θ) = pendiente%)
+        slope_threshold = float(np.degrees(np.arctan(slope_threshold_pct / 100)))
 
         if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
             st.session_state["terrain"] = None
@@ -504,7 +519,7 @@ with tab_elegibilidad:
                     ), use_container_width=True, key="scale_aspect",
                 )
             with c4:
-                st.markdown(f"**🌱 Zona cultivable (pendiente < {slope_threshold}°)**")
+                st.caption(f"🌱 Zona cultivable (pendiente < {slope_threshold_pct}%)")
                 st_folium(maps["cultiv_map"], width=420, height=340,
                           returned_objects=[], key="map_cultiv")
                 st.markdown(
@@ -513,7 +528,7 @@ with tab_elegibilidad:
                     '<span style="background:#dc2626;padding:3px 10px;border-radius:4px;color:white;font-size:0.82rem">🔴 No cultivable</span>'
                     '</div>', unsafe_allow_html=True,
                 )
-                kpi(f"Área cultivable (<{slope_threshold}°)",
+                kpi(f"Área cultivable (<{slope_threshold_pct}%)",
                     f"{s['area_cultivable_ha']} ha", f"({s['pct_cultivable']}%)")
 
             st.markdown("---")
