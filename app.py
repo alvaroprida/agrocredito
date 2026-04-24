@@ -156,19 +156,23 @@ def gauge_riesgo(valor_pct, titulo):
     return fig
 
 def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> str:
-    """Genera una barra de color HTML con etiquetas."""
+    """Barra de color HTML horizontal con etiquetas."""
     gradient = ", ".join(colors)
+    n = len(ticks)
     tick_html = "".join(
-        f'<span style="flex:1;text-align:center;font-size:0.75rem;color:#475569">{t}</span>'
-        for t in ticks
+        f'<span style="flex:1;text-align:{"left" if i==0 else "right" if i==n-1 else "center"};'
+        f'font-size:0.75rem;color:#475569">{t}</span>'
+        for i, t in enumerate(ticks)
     )
-    return f"""
-    <div style="margin:4px 0 12px 0">
-      <div style="font-size:0.78rem;color:#64748b;margin-bottom:3px">{label} {units}</div>
-      <div style="height:14px;border-radius:4px;background:linear-gradient(to right,{gradient})"></div>
-      <div style="display:flex;margin-top:2px">{tick_html}</div>
-    </div>
-    """
+    return (
+        f'<div style="margin:6px 0 14px 0">'
+        f'<div style="font-size:0.78rem;color:#64748b;margin-bottom:3px">'
+        f'<b>{label}</b> {units}</div>'
+        f'<div style="height:16px;border-radius:4px;border:1px solid #e2e8f0;'
+        f'background:linear-gradient(to right,{gradient})"></div>'
+        f'<div style="display:flex;margin-top:2px">{tick_html}</div>'
+        f'</div>'
+    )
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=valor_pct,
         title={"text": titulo, "font": {"size": 13}},
@@ -319,6 +323,16 @@ with tab_inicio:
     st_folium(mapa_predio_simple(lat, lon, predio),
               width=750, height=450, returned_objects=[])
     st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
+
+    # ── Descarga GeoJSON ──────────────────────────────────────────────────
+    import json as _json
+    geojson_str = _json.dumps(predio["geojson"], ensure_ascii=False, indent=2)
+    st.download_button(
+        label="⬇️ Descargar GeoJSON del predio",
+        data=geojson_str,
+        file_name=f"predio_{predio['codigo']}.geojson",
+        mime="application/geo+json",
+    )
 
     st.markdown("---")
     st.markdown("👉 Navega a **Eligibilidad** para el análisis detallado del predio.")
