@@ -503,9 +503,12 @@ with tab_elegibilidad:
             st.info("No se han identificado construcciones dentro del predio en el catastro.")
             area_const_real = 0.0
         else:
-            df_const = gdf_const[["codigo","tipo_const","numero_pis","area_ha"]].copy()
-            df_const.columns = ["Código construcción","Tipo","Pisos","Área (ha)"]
+            df_const = gdf_const[["codigo","identifica","tipo_const","numero_pis","area_ha"]].copy()
+            df_const.columns = ["Código","Uso / Identificación","Tipo","Pisos","Área (ha)"]
             st.dataframe(df_const, use_container_width=True, hide_index=True)
+
+            area_const_real = float(gdf_const["area_ha"].sum())
+            kpi("Área total construida", f"{area_const_real:.4f}", "ha")
 
             area_const_real = float(gdf_const["area_ha"].sum())
             kpi("Área total construida", f"{area_const_real:.4f}", "ha")
