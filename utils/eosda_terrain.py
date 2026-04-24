@@ -229,21 +229,17 @@ def _cultivable_to_png_b64(cultivable_mask, no_cultivable_mask,
 # ── Construcción mapas Folium ─────────────────────────────────────────────────
 
 def build_terrain_maps(gdf_predio: gpd.GeoDataFrame, terrain: dict) -> dict:
-    """
-    Construye 4 mapas Folium con overlays raster:
-        - dem_map      : elevación
-        - slope_map    : pendiente
-        - aspect_map   : aspecto
-        - cultiv_map   : zona cultivable vs no cultivable
-    """
     import folium
     from folium.plugins import Fullscreen
 
     dem    = terrain["dem"]
     slope  = terrain["slope"]
     aspect = terrain["aspect"]
-    bounds_wgs84 = terrain["bounds_wgs84"]  # (minx, miny, maxx, maxy)
-    bx = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
+    bounds_wgs84      = terrain["bounds_wgs84"]       # con buffer → para overlay
+    bounds_wgs84_orig = terrain["bounds_wgs84_orig"]  # sin buffer → para fit_bounds
+    bx_overlay = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
+    bx_fit     = [[bounds_wgs84_orig[1], bounds_wgs84_orig[0]],
+                  [bounds_wgs84_orig[3], bounds_wgs84_orig[2]]]
 
     geom   = gdf_predio.geometry.iloc[0]
     center = [geom.centroid.y, geom.centroid.x]
@@ -251,7 +247,7 @@ def build_terrain_maps(gdf_predio: gpd.GeoDataFrame, terrain: dict) -> dict:
     def _base(center, zoom=16):
         m = folium.Map(location=center, zoom_start=zoom, tiles="Esri.WorldImagery")
         Fullscreen().add_to(m)
-        m.fit_bounds(bx)
+        m.fit_bounds(bx_fit)
         return m
 
     def _add_predio_outline(m):
@@ -261,37 +257,33 @@ def build_terrain_maps(gdf_predio: gpd.GeoDataFrame, terrain: dict) -> dict:
                                        "weight":2.5,"fillOpacity":0},
         ).add_to(m)
 
-    # ── DEM ───────────────────────────────────────────────────────────────
     dem_map = _base(center)
     png_dem = _array_to_png_b64(dem, "terrain")
     folium.raster_layers.ImageOverlay(
-        image=png_dem, bounds=bx, opacity=0.75, name="Elevación",
+        image=png_dem, bounds=bx_overlay, opacity=0.75, name="Elevación",
     ).add_to(dem_map)
     _add_predio_outline(dem_map)
 
-    # ── Slope ─────────────────────────────────────────────────────────────
     slope_map = _base(center)
     png_slope = _array_to_png_b64(slope, "RdYlGn_r", vmin=0, vmax=50)
     folium.raster_layers.ImageOverlay(
-        image=png_slope, bounds=bx, opacity=0.75, name="Pendiente",
+        image=png_slope, bounds=bx_overlay, opacity=0.75, name="Pendiente",
     ).add_to(slope_map)
     _add_predio_outline(slope_map)
 
-    # ── Aspect ────────────────────────────────────────────────────────────
     aspect_map = _base(center)
     png_aspect = _array_to_png_b64(aspect, "hsv", vmin=0, vmax=360)
     folium.raster_layers.ImageOverlay(
-        image=png_aspect, bounds=bx, opacity=0.75, name="Aspecto",
+        image=png_aspect, bounds=bx_overlay, opacity=0.75, name="Aspecto",
     ).add_to(aspect_map)
     _add_predio_outline(aspect_map)
 
-    # ── Cultivable ────────────────────────────────────────────────────────
     cultiv_map = _base(center)
     png_cult   = _cultivable_to_png_b64(
         terrain["cultivable_mask"], terrain["no_cultivable_mask"]
     )
     folium.raster_layers.ImageOverlay(
-        image=png_cult, bounds=bx, opacity=0.75, name="Zona cultivable",
+        image=png_cult, bounds=bx_overlay, opacity=0.75, name="Zona cultivable",
     ).add_to(cultiv_map)
     _add_predio_outline(cultiv_map)
 
@@ -315,10 +307,17 @@ def get_terrain_analysis(gdf_predio: gpd.GeoDataFrame,
     if not api_key:
         raise ValueError("EOSDA_API_KEY no configurada en secrets.")
 
-    dem, transform, crs, bounds_wgs84 = _download_dem(gdf_predio, api_key)
+    dem_buf, mask_orig, transform, crs, bounds_wgs84, bounds_wgs84_orig = \
+        _download_dem(gdf_predio, api_key)
 
-    slope  = _calc_slope(dem, transform, crs)
-    aspect = _calc_aspect(dem, transform, crs)
+    # Calcular pendiente sobre el DEM con buffer → bordes correctos
+    slope_buf  = _calc_slope(dem_buf, transform, crs)
+    aspect_buf = _calc_aspect(dem_buf, transform, crs)
+
+    # Aplicar máscara del polígono original para estadísticas y visualización
+    dem    = dem_buf.copy();    dem[~mask_orig]    = np.nan
+    slope  = slope_buf.copy();  slope[~mask_orig]  = np.nan
+    aspect = aspect_buf.copy(); aspect[~mask_orig] = np.nan
 
     res_x, res_y  = _get_res_meters(transform, crs, dem.shape)
     pixel_area_ha = (res_x * res_y) / 10_000
@@ -374,6 +373,7 @@ def get_terrain_analysis(gdf_predio: gpd.GeoDataFrame,
         "pixel_area_ha":     pixel_area_ha,
         "slope_threshold":   slope_threshold,
         "bounds_wgs84":      bounds_wgs84,
+        "bounds_wgs84_orig": bounds_wgs84_orig,
         "stats":             stats,
     }
 
