@@ -633,7 +633,7 @@ with tab_elegibilidad:
         area_total = predio.get("area_ha", d["area_total_ha"])
 
         area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
-        area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          d["area_ndvi_bajo_ha"])
+        area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
         area_const = st.session_state.get("area_construcciones_ha",     d["area_construcciones_ha"])
         _slope_pct = st.session_state.get("slope_threshold",  25)
         _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
