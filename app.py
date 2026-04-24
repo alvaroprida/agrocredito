@@ -576,9 +576,9 @@ with tab_elegibilidad:
             df_area = pd.DataFrame({
                 "Componente": [
                     "Área total del predio",
-                    f"− Pendiente >{_slope_pct}% (excluida)",
-                    f"− NDVI < {_ndvi_thr} (excluida)",
-                    "− Construcciones (excluida)",
+                    f"− Pendiente >{_slope_pct}% (A2-A)",
+                    f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
+                    "− Construcciones (A2-B)",
                     f"  ↳ Solapamiento evitado ({metodo})",
                     "✅ Área efectiva cultivable",
                 ],
