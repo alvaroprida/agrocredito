@@ -339,21 +339,97 @@ with tab_elegibilidad:
     st.markdown("### 📐 A · Validación Geométrica y Legal")
 
     # ── A1 · Área efectiva cultivable ────────────────────────────────────
+    # ── A1 · Área efectiva cultivable ────────────────────────────────────
     with st.expander("📏 A1 · Área Efectiva Cultivable", expanded=True):
-        st.caption("Pendiente hardcoded · NDVI hardcoded · Construcciones hardcoded")
 
-        # Checkboxes capas
+        # ── Análisis del Terreno ──────────────────────────────────────────
+        st.markdown("##### 🏔️ Análisis del Terreno (EOSDA API)")
+
+        slope_threshold = st.slider(
+            "Umbral de pendiente no cultivable (°)",
+            min_value=5, max_value=30, value=15, step=1,
+            key="slope_threshold",
+        )
+
+        if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
+            st.session_state["terrain"] = None
+            with st.spinner("Descargando DEM y calculando terreno..."):
+                try:
+                    terrain = get_terrain_analysis(predio["gdf"], slope_threshold)
+                    st.session_state["terrain"] = terrain
+                except Exception as e:
+                    st.error(f"❌ Error al obtener datos de terreno: {e}")
+
+        terrain = st.session_state.get("terrain")
+
+        if terrain is None:
+            st.info("Pulsa **Calcular terreno** para descargar el DEM del predio desde EOSDA API.")
+        else:
+            s    = terrain["stats"]
+            maps = terrain["maps"]
+
+            # ── KPIs ──────────────────────────────────────────────────
+            st.markdown("**Estadísticas del predio**")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1: kpi("Elevación mínima",  f"{s['elev_min']:.0f}",   "m")
+            with c2: kpi("Elevación media",   f"{s['elev_mean']:.0f}",  "m")
+            with c3: kpi("Elevación máxima",  f"{s['elev_max']:.0f}",   "m")
+            with c4: kpi("Pendiente media",   f"{s['slope_mean']:.1f}", "°")
+            with c5: kpi("Aspecto dominante", s["aspect_dominant"])
+
+            st.markdown("---")
+
+            # ── Mapas Folium ───────────────────────────────────────────
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption("🏔️ Elevación (DEM)")
+                st_folium(maps["dem_map"], width=340, height=280,
+                          returned_objects=[], key="map_dem")
+            with c2:
+                st.caption("📐 Pendiente (Slope)")
+                st_folium(maps["slope_map"], width=340, height=280,
+                          returned_objects=[], key="map_slope")
+
+            c3, c4 = st.columns(2)
+            with c3:
+                st.caption("🧭 Aspecto (Orientación)")
+                st_folium(maps["aspect_map"], width=340, height=280,
+                          returned_objects=[], key="map_aspect")
+            with c4:
+                st.caption(f"🌱 Zona cultivable (pendiente < {slope_threshold}°)")
+                st_folium(maps["cultiv_map"], width=340, height=280,
+                          returned_objects=[], key="map_cultiv")
+
+            # ── Distribución clases de pendiente ──────────────────────
+            st.markdown("**Distribución de clases de pendiente**")
+            clases  = list(s["slope_classes"].keys())
+            valores = list(s["slope_classes"].values())
+            colors  = ["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"]
+            fig_cls = go.Figure(go.Bar(
+                x=clases, y=valores, marker_color=colors,
+                text=[f"{v:.1f}%" for v in valores], textposition="outside",
+            ))
+            fig_cls.update_layout(
+                height=240, margin=dict(t=20,b=60,l=10,r=10),
+                yaxis=dict(title="% del área", range=[0, max(valores)*1.2]),
+                xaxis=dict(tickangle=-20), showlegend=False,
+            )
+            st.plotly_chart(fig_cls, use_container_width=True)
+
+            st.session_state["area_pendiente_excluida_ha"] = s["area_no_cultivable_ha"]
+
+        st.markdown("---")
+        st.caption("NDVI y Construcciones hardcoded · Se conectará en la próxima versión")
+
+        # ── Checkboxes capas mapa ─────────────────────────────────────
         col1, col2, col3, col4 = st.columns(4)
-        with col1: ver_predio_a1    = st.checkbox("🟢 Predio",        value=True, key="a1_predio")
-        with col2: ver_pendiente    = st.checkbox("🔴 Pendiente >15°", value=True, key="a1_pend")
-        with col3: ver_ndvi_bajo    = st.checkbox("🟡 NDVI bajo",      value=True, key="a1_ndvi")
-        with col4: ver_const_a1     = st.checkbox("🟠 Construcciones", value=True, key="a1_const")
+        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",         value=True, key="a1_predio")
+        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >15°",  value=True, key="a1_pend")
+        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo",       value=True, key="a1_ndvi")
+        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones",  value=True, key="a1_const")
 
-        # Datos simulados de pendiente y NDVI
-        slope = MOCK_SLOPE
-        area_total = predio.get("area_ha", slope["area_total_ha"])
+        area_total = predio.get("area_ha", d["area_total_ha"])
 
-        # Mapa simulado (polígono predio + zonas hardcoded)
         m_a1 = _base_map(predio["gdf"])
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
@@ -378,15 +454,13 @@ with tab_elegibilidad:
                                                           "weight":1,"fillOpacity":0.5},
                                tooltip="NDVI < 0.40").add_to(m_a1)
 
-        # Re-aplicar fit_bounds al final
         bounds = predio["gdf"].geometry.iloc[0].bounds
         m_a1.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
-        # Tabla resumen
+        # ── Tabla área efectiva ───────────────────────────────────────
         st.markdown("**Cálculo del Área Efectiva Cultivable**")
-        area_pend  = d["area_pendiente_excluida_ha"]
+        area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
         area_ndvi  = d["area_ndvi_bajo_ha"]
         area_const = d["area_construcciones_ha"]
         area_ef    = round(area_total - area_pend - area_ndvi - area_const, 2)
@@ -395,7 +469,7 @@ with tab_elegibilidad:
         c_left, c_right = st.columns([2, 1])
         with c_left:
             df_area = pd.DataFrame({
-                "Componente": ["Área total del predio","− Pendiente >15°",
+                "Componente": ["Área total del predio","− Pendiente >umbral",
                                "− NDVI bajo umbral","− Construcciones",
                                "✅ Área efectiva cultivable"],
                 "Hectáreas":  [area_total, -area_pend, -area_ndvi, -area_const, area_ef],
