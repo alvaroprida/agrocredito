@@ -336,7 +336,15 @@ with tab_elegibilidad:
         st.info("Primero analiza un predio en el tab **Inicio**.")
         st.stop()
 
-    st.subheader(f"Evaluación de Eligibilidad · {cultivo.capitalize()} · {d.get('municipio','')}")
+    # ── Título dinámico: municipio y departamento desde el predio catastral ──
+    municipio_real    = predio.get("municipio", "")
+    departamento_real = predio.get("departamento", "")
+    ubicacion_label   = (
+        f"{municipio_real}, {departamento_real}"
+        if municipio_real and departamento_real
+        else municipio_real or departamento_real or d.get("municipio", "")
+    )
+    st.subheader(f"Evaluación de Eligibilidad · {cultivo.capitalize()} · {ubicacion_label}")
 
     # ════════════════════════════════════════════════════════════════════
     #  A · VALIDACIÓN GEOMÉTRICA Y LEGAL
@@ -624,14 +632,12 @@ with tab_elegibilidad:
 
         area_total = predio.get("area_ha", d["area_total_ha"])
 
-        # Variables desde session_state — reflejan los cálculos de A2-A, A2-B, A2-C
         area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
         area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          d["area_ndvi_bajo_ha"])
         area_const = st.session_state.get("area_construcciones_ha",     d["area_construcciones_ha"])
         _slope_pct = st.session_state.get("slope_threshold",  25)
         _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
 
-        # Superposición sin doble conteo
         _terrain  = st.session_state.get("terrain")
         _ndvi_res = st.session_state.get("ndvi_result")
         _s_mask   = _terrain.get("no_cultivable_mask") if _terrain  else None
@@ -652,7 +658,6 @@ with tab_elegibilidad:
         area_ef = round(max(area_total - area_excluida, 0), 2)
         pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
 
-        # Mapa resumen
         m_a1 = _base_map(predio["gdf"])
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
@@ -677,7 +682,6 @@ with tab_elegibilidad:
         _fit(m_a1, predio["gdf"])
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
-        # Tabla desglose
         c_left, c_right = st.columns([2, 1])
         with c_left:
             solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
@@ -893,7 +897,7 @@ with tab_riesgo:
 
     st.markdown("---")
     rg = d["riesgo_global"]
-    semaforo(f"**Riesgo agroclimático global: {rg}** · {cultivo.capitalize()} · {d.get('municipio','')}",
+    semaforo(f"**Riesgo agroclimático global: {rg}** · {cultivo.capitalize()} · {ubicacion_label}",
              {"Bajo":"verde","Medio":"naranja","Alto":"rojo"}.get(rg,"naranja"))
 
 # ════════════════════════════════════════════════════════════════════════════
