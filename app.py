@@ -17,6 +17,7 @@ from streamlit_folium import st_folium
 from datetime import date, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+import geopandas as gpd
 
 from utils.postgis_client import (
     get_predio_por_punto,
@@ -106,21 +107,7 @@ CASOS_ESTUDIO = {
     },
 }
 
-# Pendiente simulada (hasta conectar EOSDA API)
-MOCK_SLOPE = {
-    "area_total_ha": 12.4,
-    "area_cultivable_ha": 9.7,
-    "area_no_cultivable_ha": 2.7,
-    "pct_cultivable": 78.2,
-    "umbral_grados": 15.0,
-}
-
-# NDVI simulado
-MOCK_NDVI = {
-    "ndvi_promedio": 0.71,
-    "area_ndvi_bajo_ha": 0.6,
-    "umbral_ndvi": 0.40,
-}
+MOCK_NDVI = {"ndvi_promedio": 0.71, "area_ndvi_bajo_ha": 0.6, "umbral_ndvi": 0.40}
 
 # ════════════════════════════════════════════════════════════════════════════
 #  PALETAS Y HELPERS
@@ -128,21 +115,18 @@ MOCK_NDVI = {
 
 COLOR_RIESGO   = {"Nulo":"🟢","Bajo":"🟢","Medio":"🟡","Alto":"🔴","Muy Alto":"🔴"}
 COLOR_SEMAFORO = {"verde":"semaforo-verde","naranja":"semaforo-naranja","rojo":"semaforo-rojo"}
-
 COLORES_FRONTERA = {
-    "Frontera agrícola":             "#16a34a",
+    "Frontera agrícola":"#16a34a",
     "Frontera agrícola condicionada":"#d97706",
-    "Área protegida":                "#dc2626",
+    "Área protegida":"#dc2626",
 }
-COLORES_APTITUD = {
-    "Alta":"#15803d","Media":"#ca8a04","Baja":"#b45309","No apta":"#dc2626",
-}
-# clase_ufh 01–04 = alto potencial → verde; 05–08 = medio → amarillo; 09+ = bajo → rojo
+COLORES_APTITUD = {"Alta":"#15803d","Media":"#ca8a04","Baja":"#b45309","No apta":"#dc2626"}
+
 def color_ufh(clase):
     try:
         n = int(clase)
-        if n <= 4:  return "#15803d"
-        if n <= 8:  return "#ca8a04"
+        if n <= 4: return "#15803d"
+        if n <= 8: return "#ca8a04"
         return "#dc2626"
     except Exception:
         return "#94a3b8"
@@ -173,30 +157,21 @@ def gauge_riesgo(valor_pct, titulo):
 
 # ── Mapas ─────────────────────────────────────────────────────────────────────
 
-def _get_bounds(gdf_predio):
-    b = gdf_predio.geometry.iloc[0].bounds
-    return [[b[1], b[0]], [b[3], b[2]]]
-
 def _calc_zoom(gdf_predio):
-    """Calcula zoom apropiado según el tamaño del predio."""
     b = gdf_predio.geometry.iloc[0].bounds
-    max_span = max(b[2] - b[0], b[3] - b[1])
-    if max_span < 0.001:   return 18
-    if max_span < 0.003:   return 17
-    if max_span < 0.007:   return 16
-    if max_span < 0.015:   return 15
-    if max_span < 0.03:    return 14
-    if max_span < 0.07:    return 13
+    span = max(b[2]-b[0], b[3]-b[1])
+    if span < 0.001: return 18
+    if span < 0.003: return 17
+    if span < 0.007: return 16
+    if span < 0.015: return 15
+    if span < 0.03:  return 14
+    if span < 0.07:  return 13
     return 12
 
 def _base_map(gdf_predio):
     geom = gdf_predio.geometry.iloc[0]
-    zoom = _calc_zoom(gdf_predio)
-    m = folium.Map(
-        location=[geom.centroid.y, geom.centroid.x],
-        zoom_start=zoom,
-        tiles="Esri.WorldImagery",
-    )
+    m = folium.Map(location=[geom.centroid.y, geom.centroid.x],
+                   zoom_start=_calc_zoom(gdf_predio), tiles="Esri.WorldImagery")
     Fullscreen().add_to(m)
     return m
 
@@ -211,16 +186,20 @@ def _add_predio(m, gdf_predio):
         ),
     ).add_to(m)
 
+def _fit(m, gdf_predio):
+    b = gdf_predio.geometry.iloc[0].bounds
+    m.fit_bounds([[b[1],b[0]],[b[3],b[2]]])
+
 def mapa_predio_simple(lat, lon, predio):
     m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
     folium.Marker([lat, lon], tooltip="Punto ingresado",
                   icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(m)
+    _fit(m, predio["gdf"])
     return m
 
-def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
-              mostrar_capa=True, estilo_capa_fn=None,
-              campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
+def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True, mostrar_capa=True,
+              estilo_capa_fn=None, campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
     m = _base_map(gdf_predio)
     if mostrar_predio:
         _add_predio(m, gdf_predio)
@@ -233,6 +212,7 @@ def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True,
                 fields=campos_tooltip or [], aliases=aliases_tooltip or [],
             ) if campos_tooltip else folium.GeoJsonTooltip(fields=[]),
         ).add_to(m)
+    _fit(m, gdf_predio)
     return m
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -303,15 +283,13 @@ with tab_inicio:
 
     st.session_state["predio"] = predio
 
-    # ── Métricas ──────────────────────────────────────────────────────────
     st.markdown("#### 🗺️ Identificación del predio catastral")
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Código catastral",  predio["codigo"])
-    with c2: st.metric("Departamento",      predio.get("departamento", "—"))
-    with c3: st.metric("Área catastral",    f"{predio.get('area_ha', '—')} ha")
-    with c4: st.metric("Cultivo",           cultivo.capitalize())
+    with c1: st.metric("Código catastral", predio["codigo"])
+    with c2: st.metric("Departamento",     predio.get("departamento", "—"))
+    with c3: st.metric("Área catastral",   f"{predio.get('area_ha', '—')} ha")
+    with c4: st.metric("Cultivo",          cultivo.capitalize())
 
-    # ── Mapa simple (solo predio) ─────────────────────────────────────────
     st_folium(mapa_predio_simple(lat, lon, predio),
               width=750, height=450, returned_objects=[])
     st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
@@ -338,107 +316,62 @@ with tab_elegibilidad:
     # ════════════════════════════════════════════════════════════════════
     st.markdown("### 📐 A · Validación Geométrica y Legal")
 
-    # ── A1 · Área efectiva cultivable ────────────────────────────────────
-    # ── A1 · Área efectiva cultivable ────────────────────────────────────
-    with st.expander("📏 A1 · Área Efectiva Cultivable", expanded=True):
+    # ── A1 · Zona Agrícola (Frontera) ─────────────────────────────────────
+    with st.expander("🌿 A1 · Zona Agrícola (Frontera)", expanded=True):
+        with st.spinner("Cargando frontera agrícola..."):
+            gdf_frontera = get_frontera(predio["gdf"])
+        st.session_state["gdf_frontera"] = gdf_frontera
 
-        # ── Análisis del Terreno ──────────────────────────────────────────
-        st.markdown("##### 🏔️ Análisis del Terreno (EOSDA API)")
+        col1, col2 = st.columns(2)
+        with col1: ver_predio_a2   = st.checkbox("🟢 Predio",           value=True, key="a2_predio")
+        with col2: ver_frontera_a2 = st.checkbox("🟩 Frontera agrícola", value=True, key="a2_front")
 
-        slope_threshold = st.slider(
-            "Umbral de pendiente no cultivable (°)",
-            min_value=5, max_value=30, value=15, step=1,
-            key="slope_threshold",
+        def estilo_frontera(feature):
+            color = COLORES_FRONTERA.get(feature["properties"].get("tipo_condi",""), "#d97706")
+            return {"fillColor": color, "color": color, "weight": 2, "fillOpacity": 0.40}
+
+        m_a2 = mapa_capa(
+            predio["gdf"], gdf_frontera,
+            mostrar_predio=ver_predio_a2, mostrar_capa=ver_frontera_a2,
+            estilo_capa_fn=estilo_frontera,
+            campos_tooltip=["tipo_condi","area_ha","pct_predio"],
+            aliases_tooltip=["Tipo","Área (ha)","% predio"],
+            nombre_capa="Frontera agrícola",
         )
+        st_folium(m_a2, width=700, height=380, returned_objects=[], key="map_a2")
 
-        if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
-            st.session_state["terrain"] = None
-            with st.spinner("Descargando DEM y calculando terreno..."):
-                try:
-                    terrain = get_terrain_analysis(predio["gdf"], slope_threshold)
-                    st.session_state["terrain"] = terrain
-                except Exception as e:
-                    st.error(f"❌ Error al obtener datos de terreno: {e}")
-
-        terrain = st.session_state.get("terrain")
-
-        if terrain is None:
-            st.info("Pulsa **Calcular terreno** para descargar el DEM del predio desde EOSDA API.")
+        if gdf_frontera is not None and len(gdf_frontera) > 0:
+            df_front = gdf_frontera.groupby("tipo_condi").agg(
+                area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
+            ).reset_index().rename(columns={"tipo_condi":"Tipo de zona",
+                                            "area_ha":"Área (ha)","pct_predio":"% del predio"})
+            st.dataframe(df_front, use_container_width=True, hide_index=True)
+            tipos = gdf_frontera["tipo_condi"].unique().tolist()
+            nivel = "verde" if all("condicionada" not in t.lower() and "protegida" not in t.lower()
+                                   for t in tipos) else "naranja"
+            semaforo(f"Zona agrícola: **{', '.join(tipos)}**", nivel)
         else:
-            s    = terrain["stats"]
-            maps = terrain["maps"]
+            st.warning("No se encontró información de frontera agrícola para este predio.")
 
-            # ── KPIs ──────────────────────────────────────────────────
-            st.markdown("**Estadísticas del predio**")
-            c1, c2, c3, c4, c5 = st.columns(5)
-            with c1: kpi("Elevación mínima",  f"{s['elev_min']:.0f}",   "m")
-            with c2: kpi("Elevación media",   f"{s['elev_mean']:.0f}",  "m")
-            with c3: kpi("Elevación máxima",  f"{s['elev_max']:.0f}",   "m")
-            with c4: kpi("Pendiente media",   f"{s['slope_mean']:.1f}", "°")
-            with c5: kpi("Aspecto dominante", s["aspect_dominant"])
-
-            st.markdown("---")
-
-            # ── Mapas Folium ───────────────────────────────────────────
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption("🏔️ Elevación (DEM)")
-                st_folium(maps["dem_map"], width=340, height=280,
-                          returned_objects=[], key="map_dem")
-            with c2:
-                st.caption("📐 Pendiente (Slope)")
-                st_folium(maps["slope_map"], width=340, height=280,
-                          returned_objects=[], key="map_slope")
-
-            c3, c4 = st.columns(2)
-            with c3:
-                st.caption("🧭 Aspecto (Orientación)")
-                st_folium(maps["aspect_map"], width=340, height=280,
-                          returned_objects=[], key="map_aspect")
-            with c4:
-                st.caption(f"🌱 Zona cultivable (pendiente < {slope_threshold}°)")
-                st_folium(maps["cultiv_map"], width=340, height=280,
-                          returned_objects=[], key="map_cultiv")
-
-            # ── Distribución clases de pendiente ──────────────────────
-            st.markdown("**Distribución de clases de pendiente**")
-            clases  = list(s["slope_classes"].keys())
-            valores = list(s["slope_classes"].values())
-            colors  = ["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"]
-            fig_cls = go.Figure(go.Bar(
-                x=clases, y=valores, marker_color=colors,
-                text=[f"{v:.1f}%" for v in valores], textposition="outside",
-            ))
-            fig_cls.update_layout(
-                height=240, margin=dict(t=20,b=60,l=10,r=10),
-                yaxis=dict(title="% del área", range=[0, max(valores)*1.2]),
-                xaxis=dict(tickangle=-20), showlegend=False,
-            )
-            st.plotly_chart(fig_cls, use_container_width=True)
-
-            st.session_state["area_pendiente_excluida_ha"] = s["area_no_cultivable_ha"]
-
-        st.markdown("---")
+    # ── A2 · Área Efectiva Cultivable ─────────────────────────────────────
+    with st.expander("📏 A2 · Área Efectiva Cultivable", expanded=True):
         st.caption("NDVI y Construcciones hardcoded · Se conectará en la próxima versión")
 
-        # ── Checkboxes capas mapa ─────────────────────────────────────
         col1, col2, col3, col4 = st.columns(4)
-        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",         value=True, key="a1_predio")
-        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >15°",  value=True, key="a1_pend")
-        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo",       value=True, key="a1_ndvi")
-        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones",  value=True, key="a1_const")
+        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",        value=True, key="a1_predio")
+        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >15°", value=True, key="a1_pend")
+        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo",      value=True, key="a1_ndvi")
+        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones", value=True, key="a1_const")
 
         area_total = predio.get("area_ha", d["area_total_ha"])
-
         m_a1 = _base_map(predio["gdf"])
         if ver_predio_a1:
             _add_predio(m_a1, predio["gdf"])
         if ver_pendiente:
             geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
             if not geom_pend.is_empty:
-                import geopandas as _gpd
-                gdf_pend = _gpd.GeoDataFrame([{"tipo":"No cultivable"}],
-                                              geometry=[geom_pend], crs="EPSG:4326")
+                gdf_pend = gpd.GeoDataFrame([{"tipo":"No cultivable"}],
+                                             geometry=[geom_pend], crs="EPSG:4326")
                 folium.GeoJson(data=gdf_pend.to_json(),
                                style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
                                                           "weight":1,"fillOpacity":0.5},
@@ -446,20 +379,18 @@ with tab_elegibilidad:
         if ver_ndvi_bajo:
             geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
             if not geom_ndvi.is_empty:
-                import geopandas as _gpd
-                gdf_ndvi = _gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
-                                              geometry=[geom_ndvi], crs="EPSG:4326")
+                gdf_ndvi = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
+                                             geometry=[geom_ndvi], crs="EPSG:4326")
                 folium.GeoJson(data=gdf_ndvi.to_json(),
                                style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
                                                           "weight":1,"fillOpacity":0.5},
                                tooltip="NDVI < 0.40").add_to(m_a1)
-
-        bounds = predio["gdf"].geometry.iloc[0].bounds
-        m_a1.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+        _fit(m_a1, predio["gdf"])
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
-        # ── Tabla área efectiva ───────────────────────────────────────
-        st.markdown("**Cálculo del Área Efectiva Cultivable**")
+        # ── Tabla área efectiva — resultado principal ──────────────────
+        st.markdown("---")
+        st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
         area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
         area_ndvi  = d["area_ndvi_bajo_ha"]
         area_const = d["area_construcciones_ha"]
@@ -484,45 +415,123 @@ with tab_elegibilidad:
             st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
             kpi("Área efectiva", area_ef, "ha")
 
-    # ── A2 · Zona Agrícola (Frontera) ─────────────────────────────────────
-    with st.expander("🌿 A2 · Zona Agrícola (Frontera)", expanded=True):
-        with st.spinner("Cargando frontera agrícola..."):
-            gdf_frontera = get_frontera(predio["gdf"])
-        st.session_state["gdf_frontera"] = gdf_frontera
+    # ── A2b · Análisis del Terreno (detalle técnico) ───────────────────────
+    with st.expander("🏔️ Detalle: Análisis del Terreno (EOSDA API)", expanded=False):
+        st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva anterior.")
 
-        col1, col2 = st.columns(2)
-        with col1: ver_predio_a2   = st.checkbox("🟢 Predio",          value=True, key="a2_predio")
-        with col2: ver_frontera_a2 = st.checkbox("🟩 Frontera agrícola", value=True, key="a2_front")
-
-        def estilo_frontera(feature):
-            tipo  = feature["properties"].get("tipo_condi","")
-            color = COLORES_FRONTERA.get(tipo, "#d97706")
-            return {"fillColor": color, "color": color, "weight": 2, "fillOpacity": 0.40}
-
-        m_a2 = mapa_capa(
-            predio["gdf"], gdf_frontera,
-            mostrar_predio=ver_predio_a2, mostrar_capa=ver_frontera_a2,
-            estilo_capa_fn=estilo_frontera,
-            campos_tooltip=["tipo_condi", "area_ha", "pct_predio"],
-            aliases_tooltip=["Tipo", "Área (ha)", "% predio"],
-            nombre_capa="Frontera agrícola",
+        slope_threshold = st.slider(
+            "Umbral de pendiente no cultivable (°)",
+            min_value=5, max_value=30, value=15, step=1,
+            key="slope_threshold",
         )
-        st_folium(m_a2, width=700, height=380, returned_objects=[], key="map_a2")
 
-        # Tabla de distribución
-        if gdf_frontera is not None and len(gdf_frontera) > 0:
-            df_front = gdf_frontera.groupby("tipo_condi").agg(
-                area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
-            ).reset_index().rename(columns={"tipo_condi":"Tipo de zona",
-                                            "area_ha":"Área (ha)","pct_predio":"% del predio"})
-            st.dataframe(df_front, use_container_width=True, hide_index=True)
+        if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
+            st.session_state["terrain"] = None
+            with st.spinner("Descargando DEM y calculando terreno..."):
+                try:
+                    terrain = get_terrain_analysis(predio["gdf"], slope_threshold)
+                    st.session_state["terrain"] = terrain
+                except Exception as e:
+                    st.error(f"❌ Error al obtener datos de terreno: {e}")
 
-            tipos = gdf_frontera["tipo_condi"].unique().tolist()
-            nivel = "verde" if all("condicionada" not in t.lower() and "protegida" not in t.lower()
-                                    for t in tipos) else "naranja"
-            semaforo(f"Zona agrícola: **{', '.join(tipos)}**", nivel)
+        terrain = st.session_state.get("terrain")
+
+        if terrain is None:
+            st.info("Pulsa **Calcular terreno** para descargar el DEM del predio desde EOSDA API.")
         else:
-            st.warning("No se encontró información de frontera agrícola para este predio.")
+            s    = terrain["stats"]
+            maps = terrain["maps"]
+
+            st.markdown("**Estadísticas del predio**")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1: kpi("Elevación mínima",  f"{s['elev_min']:.0f}",   "m")
+            with c2: kpi("Elevación media",   f"{s['elev_mean']:.0f}",  "m")
+            with c3: kpi("Elevación máxima",  f"{s['elev_max']:.0f}",   "m")
+            with c4: kpi("Pendiente media",   f"{s['slope_mean']:.1f}", "°")
+            with c5: kpi("Aspecto dominante", s["aspect_dominant"])
+
+            st.markdown("---")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**🏔️ Elevación (DEM)**")
+                st_folium(maps["dem_map"], width=420, height=340,
+                          returned_objects=[], key="map_dem")
+                st.plotly_chart(
+                    go.Figure(go.Heatmap(
+                        z=[[s["elev_min"], s["elev_max"]]],
+                        colorscale="Earth", showscale=True,
+                        colorbar=dict(title="m s.n.m.", thickness=12, len=0.6),
+                        opacity=0,
+                    )).update_layout(
+                        height=60, margin=dict(t=0,b=0,l=0,r=80),
+                        xaxis=dict(visible=False), yaxis=dict(visible=False),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    ), use_container_width=True, key="scale_dem",
+                )
+            with c2:
+                st.markdown("**📐 Pendiente (Slope)**")
+                st_folium(maps["slope_map"], width=420, height=340,
+                          returned_objects=[], key="map_slope")
+                st.plotly_chart(
+                    go.Figure(go.Heatmap(
+                        z=[[0, 30]], colorscale="RdYlGn_r", showscale=True,
+                        colorbar=dict(title="Grados °", thickness=12, len=0.6),
+                        opacity=0,
+                    )).update_layout(
+                        height=60, margin=dict(t=0,b=0,l=0,r=80),
+                        xaxis=dict(visible=False), yaxis=dict(visible=False),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    ), use_container_width=True, key="scale_slope",
+                )
+
+            c3, c4 = st.columns(2)
+            with c3:
+                st.markdown("**🧭 Aspecto (Orientación)**")
+                st_folium(maps["aspect_map"], width=420, height=340,
+                          returned_objects=[], key="map_aspect")
+                st.plotly_chart(
+                    go.Figure(go.Heatmap(
+                        z=[[0, 360]], colorscale="HSV", showscale=True,
+                        colorbar=dict(title="Orientación", thickness=12, len=0.6,
+                                      tickvals=[0,90,180,270,360],
+                                      ticktext=["N","E","S","O","N"]),
+                        opacity=0,
+                    )).update_layout(
+                        height=60, margin=dict(t=0,b=0,l=0,r=80),
+                        xaxis=dict(visible=False), yaxis=dict(visible=False),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    ), use_container_width=True, key="scale_aspect",
+                )
+            with c4:
+                st.markdown(f"**🌱 Zona cultivable (pendiente < {slope_threshold}°)**")
+                st_folium(maps["cultiv_map"], width=420, height=340,
+                          returned_objects=[], key="map_cultiv")
+                st.markdown(
+                    '<div style="display:flex;gap:1.5rem;margin-top:4px">'
+                    '<span style="background:#16a34a;padding:3px 10px;border-radius:4px;color:white;font-size:0.82rem">🟢 Cultivable</span>'
+                    '<span style="background:#dc2626;padding:3px 10px;border-radius:4px;color:white;font-size:0.82rem">🔴 No cultivable</span>'
+                    '</div>', unsafe_allow_html=True,
+                )
+                kpi(f"Área cultivable (<{slope_threshold}°)",
+                    f"{s['area_cultivable_ha']} ha", f"({s['pct_cultivable']}%)")
+
+            st.markdown("---")
+            st.markdown("**Distribución de clases de pendiente**")
+            clases  = list(s["slope_classes"].keys())
+            valores = list(s["slope_classes"].values())
+            fig_cls = go.Figure(go.Bar(
+                x=clases, y=valores,
+                marker_color=["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"],
+                text=[f"{v:.1f}%" for v in valores], textposition="outside",
+            ))
+            fig_cls.update_layout(
+                height=260, margin=dict(t=20,b=60,l=10,r=10),
+                yaxis=dict(title="% del área", range=[0, max(valores)*1.2]),
+                xaxis=dict(tickangle=-20), showlegend=False,
+            )
+            st.plotly_chart(fig_cls, use_container_width=True)
+            st.session_state["area_pendiente_excluida_ha"] = s["area_no_cultivable_ha"]
 
     # ════════════════════════════════════════════════════════════════════
     #  B · VALIDACIÓN CONTINUIDAD PRODUCTIVA
@@ -536,12 +545,11 @@ with tab_elegibilidad:
         st.session_state["gdf_aptitud"] = gdf_aptitud
 
         col1, col2 = st.columns(2)
-        with col1: ver_predio_b1  = st.checkbox("🟢 Predio",   value=True, key="b1_predio")
-        with col2: ver_aptitud_b1 = st.checkbox("🟦 Aptitud",  value=True, key="b1_apt")
+        with col1: ver_predio_b1  = st.checkbox("🟢 Predio",  value=True, key="b1_predio")
+        with col2: ver_aptitud_b1 = st.checkbox("🟦 Aptitud", value=True, key="b1_apt")
 
         def estilo_aptitud(feature):
-            apt   = feature["properties"].get("aptitud","")
-            color = COLORES_APTITUD.get(apt, "#3b82f6")
+            color = COLORES_APTITUD.get(feature["properties"].get("aptitud",""), "#3b82f6")
             return {"fillColor": color, "color": color, "weight": 1.5, "fillOpacity": 0.45}
 
         m_b1 = mapa_capa(
@@ -574,8 +582,7 @@ with tab_elegibilidad:
         with col2: ver_vp_b2     = st.checkbox("🟦 Valor potencial", value=True, key="b2_vp")
 
         def estilo_vp(feature):
-            clase = feature["properties"].get("clase_ufh","")
-            color = color_ufh(clase)
+            color = color_ufh(feature["properties"].get("clase_ufh",""))
             return {"fillColor": color, "color": color, "weight": 1.5, "fillOpacity": 0.45}
 
         m_b2 = mapa_capa(
