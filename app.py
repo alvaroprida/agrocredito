@@ -503,6 +503,9 @@ with tab_elegibilidad:
             st.info("No se han identificado construcciones dentro del predio en el catastro.")
             area_const_real = 0.0
         else:
+            # Debug temporal — eliminar después
+            st.write("Columnas disponibles:", list(gdf_const.columns))
+
             # Tabla de construcciones
             df_const = gdf_const[["identifica","tipo_const","numero_pis","area_ha"]].copy()
             df_const.columns = ["Identificación","Tipo","Pisos","Área (ha)"]
