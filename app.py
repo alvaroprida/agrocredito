@@ -259,28 +259,18 @@ tab_inicio, tab_elegibilidad, tab_riesgo, tab_monitoreo = st.tabs([
 with tab_inicio:
     st.subheader("Datos del predio a evaluar")
 
-    modo = st.radio("Modo de entrada",
-                    ["📂 Caso de estudio (demo)", "📍 Coordenadas manuales"],
-                    horizontal=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: lat_input = st.number_input("Latitud",  value=4.21640,  format="%.6f")
+    with c2: lon_input = st.number_input("Longitud", value=-73.97898, format="%.6f")
+    with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
 
-    if modo == "📂 Caso de estudio (demo)":
-        caso_sel = st.selectbox("Selecciona caso de estudio", list(CASOS_ESTUDIO.keys()))
-        d = CASOS_ESTUDIO[caso_sel]
-        st.session_state.update({"datos": d, "lat": d["lat"], "lon": d["lon"],
-                                  "cultivo": d["cultivo"], "analizado": True})
-    else:
-        c1, c2, c3 = st.columns(3)
-        with c1: lat_input = st.number_input("Latitud",  value=4.21640,  format="%.6f")
-        with c2: lon_input = st.number_input("Longitud", value=-73.97898, format="%.6f")
-        with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
-
-        if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
-            caso_m = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
-            st.session_state.update({
-                "lat": lat_input, "lon": lon_input, "cultivo": cultivo_in,
-                "analizado": True,
-                "datos": {**CASOS_ESTUDIO[caso_m], "lat": lat_input, "lon": lon_input},
-            })
+    if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
+        caso_m = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
+        st.session_state.update({
+            "lat": lat_input, "lon": lon_input, "cultivo": cultivo_in,
+            "analizado": True,
+            "datos": {**CASOS_ESTUDIO[caso_m], "lat": lat_input, "lon": lon_input},
+        })
 
     st.markdown("---")
 
