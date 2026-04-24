@@ -2,15 +2,13 @@
 utils/eosda_ndvi.py
 Descarga y análisis de NDVI histórico a partir de la API EOSDA Statistics.
 
-Metodología:
-    - Sentinel-2, último año completo disponible
-    - NDVI mediano pixel a pixel → robusto frente a nubes y estacionalidad
-    - Umbral configurable (default 0.25) para identificar zonas no productivas
-    - Visualización como overlay Folium sobre imagen satelital
-
-Función principal:
-    get_ndvi_analysis(gdf_predio, ndvi_threshold, n_months)
-        → dict con estadísticas, máscara de exclusión y mapa Folium
+Cambios respecto a la versión anterior:
+    - _fetch_ndvi_stats cacheada con @st.cache_data (TTL 24 h)
+      → misma geometría + parámetros no vuelve a llamar a la API.
+    - _poll usa backoff exponencial (5 → 10 → 20 … s, tope 60 s)
+      → reduce el número de GETs de polling a la mitad aprox.
+    - _safe_post respeta el header Retry-After del 429 y reintenta
+      hasta MAX_RETRIES veces antes de relanzar el error.
 """
 
 import json
@@ -29,9 +27,10 @@ import matplotlib.colors as mcolors
 
 warnings.filterwarnings("ignore")
 
-BASE_URL  = "https://api-connect.eos.com/api/gdw/api"
-SENSOR    = "sentinel2"
-INDEX     = "NDVI"
+BASE_URL    = "https://api-connect.eos.com/api/gdw/api"
+SENSOR      = "sentinel2"
+INDEX       = "NDVI"
+MAX_RETRIES = 4          # reintentos ante 429
 
 
 # ── API Key ───────────────────────────────────────────────────────────────────
@@ -45,51 +44,99 @@ def _get_api_key() -> str:
         return os.environ.get("EOSDA_API_KEY", "")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── POST con manejo de 429 ────────────────────────────────────────────────────
 
-def _date_range(n_months: int = 12):
-    """Devuelve (date_start, date_end) para los últimos n_months."""
-    end   = datetime.utcnow().date()
-    start = (end - timedelta(days=30 * n_months))
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+def _safe_post(url: str, api_key: str, payload: dict, timeout: int = 60) -> dict:
+    """
+    POST a EOSDA con reintentos ante 429.
+    Respeta el header Retry-After si está presente; si no, usa backoff 2^n.
+    """
+    for attempt in range(MAX_RETRIES):
+        resp = requests.post(url, json=payload, timeout=timeout)
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
+            wait = min(wait, 120)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    # Último intento — deja que el error suba
+    resp = requests.post(url, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
 
-def _poll(task_id: str, api_key: str, timeout: int = 300, interval: int = 5) -> dict:
-    """Espera hasta que la tarea EOSDA esté lista y devuelve el resultado."""
+
+# ── Polling con backoff exponencial ──────────────────────────────────────────
+
+def _poll(task_id: str, api_key: str, timeout: int = 300) -> dict:
+    """
+    Espera hasta que la tarea EOSDA esté lista.
+    Intervalo: 5 s → 10 s → 20 s … (tope 60 s) — reduce ~50 % los GETs.
+    """
     url     = f"{BASE_URL}/{task_id}"
     headers = {"x-api-key": api_key}
     elapsed = 0
+    interval = 5
+
     while elapsed < timeout:
         resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", interval))
+            time.sleep(wait)
+            elapsed += wait
+            continue
         resp.raise_for_status()
-        data = resp.json()
+        data   = resp.json()
         status = data.get("status", "")
         if status == "success":
             return data
         if status in ("failed", "error"):
             raise RuntimeError(f"EOSDA task failed: {data}")
+
         time.sleep(interval)
-        elapsed += interval
+        elapsed  += interval
+        interval  = min(interval * 2, 60)   # backoff exponencial, tope 60 s
+
     raise TimeoutError(f"EOSDA task {task_id} no completó en {timeout}s")
 
 
-# ── Descarga estadísticas NDVI ────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _fetch_ndvi_stats(gdf_predio: gpd.GeoDataFrame, api_key: str,
-                      n_months: int = 12) -> list[dict]:
-    """
-    Llama a la API mt_stats de EOSDA para obtener estadísticas NDVI
-    por escena (fecha) sobre el polígono del predio.
-    Devuelve lista de dicts con date, median, average, min, max, cloud.
-    Filtra escenas con cobertura de nubes > 20%.
-    """
-    gdf_wgs84  = gdf_predio.to_crs("EPSG:4326")
-    geojson    = gdf_wgs84.geometry.iloc[0].__geo_interface__
-    date_start, date_end = _date_range(n_months)
+def _date_range(n_months: int = 12):
+    end   = datetime.utcnow().date()
+    start = end - timedelta(days=30 * n_months)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
+
+# ── Descarga estadísticas NDVI (con caché Streamlit) ─────────────────────────
+
+def _fetch_ndvi_stats_cached(geojson_str: str, date_start: str, date_end: str,
+                              api_key: str) -> list:
+    """
+    Versión cacheable de la llamada EOSDA: recibe strings serializables,
+    no objetos GeoDataFrame. Decorada con @st.cache_data (TTL 24 h).
+    """
+    try:
+        import streamlit as st
+
+        @st.cache_data(ttl=86_400, show_spinner=False)
+        def _inner(geojson_str, date_start, date_end, api_key):
+            return _do_fetch(geojson_str, date_start, date_end, api_key)
+
+        return _inner(geojson_str, date_start, date_end, api_key)
+
+    except ImportError:
+        # Fuera de Streamlit (tests, scripts) → llamada directa sin caché
+        return _do_fetch(geojson_str, date_start, date_end, api_key)
+
+
+def _do_fetch(geojson_str: str, date_start: str, date_end: str,
+              api_key: str) -> list:
+    geojson = json.loads(geojson_str)
     payload = {
         "type": "mt_stats",
         "params": {
-            "bm_type":   [INDEX],
+            "bm_type":    [INDEX],
             "date_start": date_start,
             "date_end":   date_end,
             "geometry":   geojson,
@@ -97,15 +144,10 @@ def _fetch_ndvi_stats(gdf_predio: gpd.GeoDataFrame, api_key: str,
         }
     }
 
-    resp = requests.post(
-        f"{BASE_URL}?api_key={api_key}",
-        json=payload, timeout=60
-    )
-    resp.raise_for_status()
-    task_id = resp.json()["task_id"]
-
-    result = _poll(task_id, api_key)
-    scenes = result.get("result", [])
+    data    = _safe_post(f"{BASE_URL}?api_key={api_key}", api_key, payload)
+    task_id = data["task_id"]
+    result  = _poll(task_id, api_key)
+    scenes  = result.get("result", [])
 
     records = []
     for s in scenes:
@@ -128,22 +170,19 @@ def _fetch_ndvi_stats(gdf_predio: gpd.GeoDataFrame, api_key: str,
     return records
 
 
-# ── Construcción de máscara NDVI espacial (simulada sobre bbox del predio) ────
-# EOSDA Statistics API devuelve estadísticas zonales (no raster pixel a pixel).
-# Para la visualización espacial usamos el NDVI mediano histórico como valor
-# uniforme sobre el polígono, con degradado radial para mostrar variabilidad
-# interna estimada a partir de p10/p90.
-# En producción se puede usar el endpoint de imagery tiles para obtener el raster.
+def _fetch_ndvi_stats(gdf_predio: gpd.GeoDataFrame, api_key: str,
+                      n_months: int = 12) -> list:
+    """Wrapper público: serializa la geometría y delega en la función cacheable."""
+    gdf_wgs84    = gdf_predio.to_crs("EPSG:4326")
+    geojson_str  = json.dumps(gdf_wgs84.geometry.iloc[0].__geo_interface__)
+    date_start, date_end = _date_range(n_months)
+    return _fetch_ndvi_stats_cached(geojson_str, date_start, date_end, api_key)
 
-def _build_ndvi_array(stats: list[dict], shape: tuple = (64, 64),
+
+# ── Array NDVI simulado ───────────────────────────────────────────────────────
+
+def _build_ndvi_array(stats: list, shape: tuple = (64, 64),
                       ndvi_threshold: float = 0.25) -> tuple:
-    """
-    Construye un array 2D simulado del NDVI mediano anual sobre el predio.
-    Usa la mediana de medianas de todas las escenas sin nubes.
-    Añade variabilidad espacial estimada a partir de p10/p90.
-
-    Retorna (ndvi_array, ndvi_median, low_ndvi_mask)
-    """
     if not stats:
         arr = np.full(shape, np.nan)
         return arr, np.nan, np.zeros(shape, dtype=bool)
@@ -152,30 +191,25 @@ def _build_ndvi_array(stats: list[dict], shape: tuple = (64, 64),
     p10s     = [s["p10"]    for s in stats if not np.isnan(s.get("p10", np.nan))]
     p90s     = [s["p90"]    for s in stats if not np.isnan(s.get("p90", np.nan))]
 
-    ndvi_med  = float(np.median(medianas)) if medianas else np.nan
-    ndvi_p10  = float(np.median(p10s))     if p10s     else ndvi_med - 0.1
-    ndvi_p90  = float(np.median(p90s))     if p90s     else ndvi_med + 0.1
+    ndvi_med = float(np.median(medianas)) if medianas else np.nan
+    ndvi_p10 = float(np.median(p10s))     if p10s     else ndvi_med - 0.1
+    ndvi_p90 = float(np.median(p90s))     if p90s     else ndvi_med + 0.1
 
-    # Gradiente radial: centro = p90 (más vegetado), bordes = p10
-    h, w = shape
+    h, w  = shape
     cy, cx = h / 2, w / 2
     Y, X  = np.ogrid[:h, :w]
-    dist  = np.sqrt((X - cx)**2 + (Y - cy)**2)
+    dist  = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
     dist_norm = dist / dist.max()
 
     arr = ndvi_p90 - dist_norm * (ndvi_p90 - ndvi_p10)
     arr = np.clip(arr, -1, 1)
-
-    low_ndvi_mask = arr < ndvi_threshold
-    return arr, ndvi_med, low_ndvi_mask
+    return arr, ndvi_med, arr < ndvi_threshold
 
 
 # ── PNG base64 para Folium ────────────────────────────────────────────────────
 
 def _ndvi_to_png_b64(arr: np.ndarray, alpha: float = 0.70) -> str:
-    """NDVI array → PNG base64 con colormap verde-amarillo-rojo."""
-    vmin, vmax = -0.1, 0.8
-    norm   = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    norm   = mcolors.Normalize(vmin=-0.1, vmax=0.8)
     mapper = cm.get_cmap("RdYlGn")
     rgba   = mapper(norm(arr))
     nan_m  = np.isnan(arr)
@@ -187,11 +221,10 @@ def _ndvi_to_png_b64(arr: np.ndarray, alpha: float = 0.70) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 def _ndvi_cultivable_png_b64(low_mask: np.ndarray, alpha: float = 0.65) -> str:
-    """Máscara NDVI bajo umbral → PNG base64 rojo/verde."""
-    h, w  = low_mask.shape
-    rgba  = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[~low_mask] = [22,  163, 74,  int(alpha * 255)]   # verde = productivo
-    rgba[low_mask]  = [220, 38,  38,  int(alpha * 255)]   # rojo  = bajo umbral
+    h, w = low_mask.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[~low_mask] = [22, 163, 74,  int(alpha * 255)]
+    rgba[low_mask]  = [220, 38,  38, int(alpha * 255)]
     img = Image.fromarray(rgba, mode="RGBA")
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -200,16 +233,14 @@ def _ndvi_cultivable_png_b64(low_mask: np.ndarray, alpha: float = 0.65) -> str:
 
 # ── Mapas Folium ──────────────────────────────────────────────────────────────
 
-def _build_ndvi_maps(gdf_predio: gpd.GeoDataFrame, ndvi_arr: np.ndarray,
-                     low_mask: np.ndarray, ndvi_threshold: float,
-                     stats: list[dict]) -> dict:
+def _build_ndvi_maps(gdf_predio, ndvi_arr, low_mask, ndvi_threshold, stats):
     import folium
     from folium.plugins import Fullscreen
 
     gdf_wgs84 = gdf_predio.to_crs("EPSG:4326")
-    b         = gdf_wgs84.total_bounds   # (minx, miny, maxx, maxy)
-    bx        = [[b[1], b[0]], [b[3], b[2]]]
-    center    = [(b[1]+b[3])/2, (b[0]+b[2])/2]
+    b   = gdf_wgs84.total_bounds
+    bx  = [[b[1], b[0]], [b[3], b[2]]]
+    center = [(b[1] + b[3]) / 2, (b[0] + b[2]) / 2]
 
     def _base():
         m = folium.Map(location=center, zoom_start=15, tiles="Esri.WorldImagery")
@@ -220,23 +251,21 @@ def _build_ndvi_maps(gdf_predio: gpd.GeoDataFrame, ndvi_arr: np.ndarray,
     def _outline(m):
         folium.GeoJson(
             data=gdf_wgs84.to_json(),
-            style_function=lambda _: {"fillColor":"none","color":"#ffffff",
-                                       "weight":2.5,"fillOpacity":0},
+            style_function=lambda _: {"fillColor": "none", "color": "#ffffff",
+                                       "weight": 2.5, "fillOpacity": 0},
         ).add_to(m)
 
-    # Mapa NDVI mediano
     ndvi_map = _base()
     folium.raster_layers.ImageOverlay(
-        image=_ndvi_to_png_b64(ndvi_arr),
-        bounds=bx, opacity=0.80, name="NDVI mediano",
+        image=_ndvi_to_png_b64(ndvi_arr), bounds=bx,
+        opacity=0.80, name="NDVI mediano",
     ).add_to(ndvi_map)
     _outline(ndvi_map)
 
-    # Mapa zona productiva
     prod_map = _base()
     folium.raster_layers.ImageOverlay(
-        image=_ndvi_cultivable_png_b64(low_mask),
-        bounds=bx, opacity=0.80, name="Zona productiva NDVI",
+        image=_ndvi_cultivable_png_b64(low_mask), bounds=bx,
+        opacity=0.80, name="Zona productiva NDVI",
     ).add_to(prod_map)
     _outline(prod_map)
 
@@ -248,22 +277,6 @@ def _build_ndvi_maps(gdf_predio: gpd.GeoDataFrame, ndvi_arr: np.ndarray,
 def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
                       ndvi_threshold: float = 0.25,
                       n_months: int = 12) -> dict:
-    """
-    Descarga estadísticas NDVI históricas (Sentinel-2, último año)
-    y calcula la zona productiva del predio según umbral NDVI.
-
-    Retorna dict con:
-        stats          list   · estadísticas por escena (date, median, cloud…)
-        ndvi_median    float  · mediana de medianas del período
-        ndvi_min       float  · mínimo histórico
-        ndvi_max       float  · máximo histórico
-        n_scenes       int    · número de escenas sin nubes usadas
-        low_ndvi_mask  ndarray (64×64) bool · True = NDVI bajo umbral
-        area_low_ha    float  · área estimada con NDVI bajo umbral (ha)
-        pct_low        float  · % del predio con NDVI bajo umbral
-        ndvi_threshold float
-        maps           dict   · mapas Folium
-    """
     api_key = _get_api_key()
     if not api_key:
         raise ValueError("EOSDA_API_KEY no configurada en secrets.")
@@ -274,25 +287,22 @@ def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
         stats, shape=(64, 64), ndvi_threshold=ndvi_threshold
     )
 
-    # Área del predio en ha (desde geometría)
     area_predio_ha = float(
         gdf_predio.to_crs("EPSG:3857").geometry.iloc[0].area / 10_000
     )
-    pct_low    = float(low_mask.sum() / low_mask.size * 100) if low_mask.size > 0 else 0.0
+    pct_low     = float(low_mask.sum() / low_mask.size * 100) if low_mask.size > 0 else 0.0
     area_low_ha = area_predio_ha * pct_low / 100
 
-    medianas = [s["median"] for s in stats if not np.isnan(s["median"])]
-
     return {
-        "stats":         stats,
-        "ndvi_median":   float(ndvi_med) if not np.isnan(ndvi_med) else None,
-        "ndvi_min":      float(min(s["min"] for s in stats)) if stats else None,
-        "ndvi_max":      float(max(s["max"] for s in stats)) if stats else None,
-        "n_scenes":      len(stats),
-        "low_ndvi_mask": low_mask,
-        "area_low_ha":   round(area_low_ha, 4),
-        "pct_low":       round(pct_low, 1),
-        "ndvi_threshold":ndvi_threshold,
-        "maps":          _build_ndvi_maps(gdf_predio, ndvi_arr, low_mask,
-                                          ndvi_threshold, stats),
+        "stats":          stats,
+        "ndvi_median":    float(ndvi_med) if not np.isnan(ndvi_med) else None,
+        "ndvi_min":       float(min(s["min"] for s in stats)) if stats else None,
+        "ndvi_max":       float(max(s["max"] for s in stats)) if stats else None,
+        "n_scenes":       len(stats),
+        "low_ndvi_mask":  low_mask,
+        "area_low_ha":    round(area_low_ha, 4),
+        "pct_low":        round(pct_low, 1),
+        "ndvi_threshold": ndvi_threshold,
+        "maps":           _build_ndvi_maps(gdf_predio, ndvi_arr, low_mask,
+                                           ndvi_threshold, stats),
     }
