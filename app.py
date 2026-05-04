@@ -2,10 +2,10 @@
 app.py  ·  AgroCredito · MVP de Evaluación Agroclimática
 Streamlit front-end — desplegable en Streamlit Cloud sin instalación local.
 
-Tab 0 · Inicio       → inputs + polígono predio + métricas
-Tab 1 · Eligibilidad → validaciones geométrica, productiva, infraestructura
-Tab 2 · Riesgo       → indicadores históricos + matriz vulnerabilidad
-Tab 3 · Monitoreo    → NDVI actual + forecast
+Tab 0 · Inicio                → inputs + polígono predio + métricas
+Tab 1 · Validación Pre-Crédito → A geométrica · B productiva · C infraestructura
+                                  D terreno · E scoring riesgo · PDF
+Tab 2 · Monitoreo             → NDVI actual + forecast
 """
 
 import streamlit as st
@@ -26,12 +26,15 @@ from utils.postgis_client import (
     get_valor_potencial,
     get_construcciones,
 )
-from utils.eosda_terrain import get_terrain_analysis
-from utils.eosda_ndvi    import get_ndvi_analysis
-from utils.risk_scoring  import score_riesgo, GRUPOS, SCORE_LABEL, SCORE_COLOR, SCORE_TEXT
+from utils.eosda_terrain  import get_terrain_analysis
+from utils.eosda_ndvi     import get_ndvi_analysis
+from utils.risk_scoring   import (
+    score_riesgo, INDICADORES, GRUPOS,
+    SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
+)
 from utils.report_generator import generate_exante_report
 
-# ── Configuración de página ──────────────────────────────────────────────────
+# ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
     page_title="AgroCredito · Evaluación de Predios",
     page_icon="🌿",
@@ -50,12 +53,14 @@ st.markdown("""
                      padding:0.6rem 1rem; border-radius:6px; }
   .kpi-box { background:#f8fafc; border:1px solid #e2e8f0;
              border-radius:8px; padding:0.8rem; text-align:center; }
+  .tag-pendiente { background:#f1f5f9; color:#64748b; font-size:0.72rem;
+                   border-radius:4px; padding:1px 6px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 #  DATOS HARDCODEADOS (MVP)
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 
 CASOS_ESTUDIO = {
     "Café · Eje Cafetero": {
@@ -71,9 +76,9 @@ CASOS_ESTUDIO = {
         "ndvi_promedio_3a": 0.71, "ndvi_umbral": 0.40,
         "construcciones_n": 3, "construcciones_desc": "Casa, bodega, beneficiadero",
         "distancia_urbana_km": 8.2,
-        "precip_mensual": [180,160,210,230,195,140,130,145,220,240,200,175],
-        "temp_max_mensual": [24,25,25,24,23,22,22,23,24,25,24,24],
-        "temp_min_mensual": [14,14,15,15,14,13,13,13,14,15,15,14],
+        "precip_mensual":    [180,160,210,230,195,140,130,145,220,240,200,175],
+        "temp_max_mensual":  [24,25,25,24,23,22,22,23,24,25,24,24],
+        "temp_min_mensual":  [14,14,15,15,14,13,13,13,14,15,15,14],
         "ndvi_mensual_hist": [.65,.67,.70,.72,.71,.68,.66,.67,.70,.73,.72,.69],
         "riesgo_sequia": "Bajo", "riesgo_exceso_lluvia": "Medio",
         "riesgo_helada": "Bajo", "riesgo_temp_alta": "Bajo", "riesgo_global": "Bajo",
@@ -97,9 +102,9 @@ CASOS_ESTUDIO = {
         "construcciones_n": 5,
         "construcciones_desc": "Casa, dos bodegas, empacadora, generador",
         "distancia_urbana_km": 14.5,
-        "precip_mensual": [280,240,310,350,320,260,220,230,310,360,330,290],
-        "temp_max_mensual": [32,33,33,32,31,31,31,32,32,33,32,32],
-        "temp_min_mensual": [22,22,23,23,22,21,21,21,22,23,23,22],
+        "precip_mensual":    [280,240,310,350,320,260,220,230,310,360,330,290],
+        "temp_max_mensual":  [32,33,33,32,31,31,31,32,32,33,32,32],
+        "temp_min_mensual":  [22,22,23,23,22,21,21,21,22,23,23,22],
         "ndvi_mensual_hist": [.74,.76,.79,.81,.80,.77,.75,.76,.79,.82,.81,.78],
         "riesgo_sequia": "Bajo", "riesgo_exceso_lluvia": "Alto",
         "riesgo_helada": "Nulo", "riesgo_temp_alta": "Medio", "riesgo_global": "Medio",
@@ -112,34 +117,83 @@ CASOS_ESTUDIO = {
 
 MOCK_NDVI = {"ndvi_promedio": 0.71, "area_ndvi_bajo_ha": 0.6, "umbral_ndvi": 0.40}
 
-# ════════════════════════════════════════════════════════════════════════════
-#  PALETAS Y HELPERS
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+#  PALETAS Y HELPERS UI
+# ══════════════════════════════════════════════════════════════════════════════
 
-COLOR_RIESGO   = {"Nulo":"🟢","Bajo":"🟢","Medio":"🟡","Alto":"🔴","Muy Alto":"🔴"}
-COLOR_SEMAFORO = {"verde":"semaforo-verde","naranja":"semaforo-naranja","rojo":"semaforo-rojo"}
+COLOR_SEMAFORO   = {"verde":"semaforo-verde","naranja":"semaforo-naranja","rojo":"semaforo-rojo"}
 COLORES_FRONTERA = {
-    "Frontera agrícola":"#16a34a",
-    "Frontera agrícola condicionada":"#d97706",
-    "Área protegida":"#dc2626",
+    "Frontera agrícola":              "#16a34a",
+    "Frontera agrícola condicionada": "#d97706",
+    "Área protegida":                 "#dc2626",
 }
-COLORES_APTITUD = {"Alta":"#15803d","Media":"#ca8a04","Baja":"#b45309","No apta":"#dc2626"}
+COLORES_APTITUD = {
+    "Alta":"#15803d","Media":"#ca8a04","Baja":"#b45309","No apta":"#dc2626",
+}
+
+# Niveles de score: 0=Sin riesgo, 1=Bajo, 2=Medio, 3=Alto, 4=Extremo
+SCORE_5_LABEL = {0:"🟢 Sin riesgo", 1:"🟢 Bajo", 2:"🟡 Medio", 3:"🔴 Alto", 4:"🚨 Extremo"}
+SCORE_5_COLOR = {0:"#d1fae5", 1:"#dcfce7", 2:"#fef9c3", 3:"#fee2e2", 4:"#fce7f3"}
+SCORE_5_TEXT  = {0:"#065f46", 1:"#14532d", 2:"#713f12", 3:"#7f1d1d", 4:"#500724"}
+
+# Umbrales estándar 5 niveles por cultivo
+# Formato: {cultivo: {id: [sin_riesgo, bajo, medio, alto, extremo]}}
+# Para direccion='mayor': valor < sin_riesgo → sin riesgo, valor < bajo → bajo, etc.
+# Para direccion='menor': inverso
+UMBRALES_5: dict[str, dict[int, list]] = {
+    "café": {
+        1:  [0,   1,   3,   5,   8  ],   # SWI meses secos
+        2:  [0,   1,   3,   5,   8  ],   # SPEI meses déficit
+        3:  [90,  80,  60,  50,  35 ],   # WRSI % (menor=peor)
+        4:  [0,   1,   3,   5,   8  ],   # Episodios lluvia extrema
+        5:  [1,   2,   3,   4,   5  ],   # Susceptibilidad desliz
+        6:  [24,  26,  28,  30,  32 ],   # T_máx °C
+        7:  [0,   0,   2,   5,   10 ],   # Días helada
+        8:  [0,   2,   5,   10,  20 ],   # Días viento fuerte
+        9:  [0.65,0.60,0.50,0.40,0.30],  # NDVI (menor=peor)
+        10: [0.25,0.20,0.10,0.00,-0.1],  # NDMI (menor=peor)
+        11: [0.45,0.40,0.30,0.20,0.10],  # NDRE (menor=peor)
+        12: [0,  -1.0,-2.0,-3.0,-4.5],   # VH backscatter (menor=peor)
+        13: [1,   2,   3,   4,   5  ],   # VPS clase suelo
+        14: [1,   1,   2,   3,   4  ],   # Aptitud clase
+        15: [5,   10,  25,  50,  100],   # Distancia urbana km
+    },
+    "plátano": {
+        1:  [0,   0,   2,   4,   6  ],
+        2:  [0,   0,   2,   4,   6  ],
+        3:  [92,  85,  70,  55,  40 ],
+        4:  [1,   2,   4,   7,   10 ],
+        5:  [1,   2,   3,   4,   5  ],
+        6:  [30,  32,  34,  35,  37 ],
+        7:  [0,   0,   1,   3,   5  ],
+        8:  [0,   1,   3,   7,   12 ],
+        9:  [0.70,0.65,0.55,0.45,0.35],
+        10: [0.30,0.25,0.15,0.05,-0.1],
+        11: [0.50,0.45,0.35,0.25,0.15],
+        12: [0,  -1.0,-2.0,-3.5,-5.0],
+        13: [1,   2,   3,   4,   5  ],
+        14: [1,   1,   2,   3,   4  ],
+        15: [5,   15,  30,  60,  120],
+    },
+}
 
 def color_ufh(clase):
     try:
         n = int(clase)
-        if n <= 4: return "#15803d"
-        if n <= 8: return "#ca8a04"
+        if n <= 4:  return "#15803d"
+        if n <= 8:  return "#ca8a04"
         return "#dc2626"
     except Exception:
         return "#94a3b8"
 
 def semaforo(texto, nivel):
-    st.markdown(f'<div class="{COLOR_SEMAFORO[nivel]}">{texto}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="{COLOR_SEMAFORO[nivel]}">{texto}</div>',
+                unsafe_allow_html=True)
 
 def kpi(label, valor, unidad=""):
     st.markdown(
-        f'<div class="kpi-box"><div style="font-size:0.78rem;color:#64748b">{label}</div>'
+        f'<div class="kpi-box">'
+        f'<div style="font-size:0.78rem;color:#64748b">{label}</div>'
         f'<div style="font-size:1.4rem;font-weight:700">{valor}'
         f'<span style="font-size:0.85rem;color:#64748b"> {unidad}</span></div></div>',
         unsafe_allow_html=True,
@@ -158,13 +212,13 @@ def gauge_riesgo(valor_pct, titulo):
     fig.update_layout(height=200, margin=dict(t=40,b=10,l=10,r=10))
     return fig
 
-def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> str:
+def _colorscale_bar(label, colors, ticks, units=""):
     gradient = ", ".join(colors)
     n = len(ticks)
     tick_html = "".join(
         f'<span style="flex:1;text-align:{"left" if i==0 else "right" if i==n-1 else "center"};'
         f'font-size:0.75rem;color:#475569">{t}</span>'
-        for i, t in enumerate(ticks)
+        for i,t in enumerate(ticks)
     )
     return (
         f'<div style="margin:6px 0 14px 0">'
@@ -175,10 +229,99 @@ def _colorscale_bar(label: str, colors: list, ticks: list, units: str = "") -> s
         f'</div>'
     )
 
+# ── Scoring 5 niveles ─────────────────────────────────────────────────────────
+
+def _score5(valor, umbrales, direccion):
+    """Devuelve 0–4 (sin riesgo→extremo)."""
+    u = umbrales  # [sin_riesgo, bajo, medio, alto, extremo]
+    if direccion == "mayor":
+        if valor < u[0]: return 0
+        if valor < u[1]: return 1
+        if valor < u[2]: return 2
+        if valor < u[3]: return 3
+        return 4
+    else:  # menor = peor
+        if valor > u[0]: return 0
+        if valor > u[1]: return 1
+        if valor > u[2]: return 2
+        if valor > u[3]: return 3
+        return 4
+
+DECISION_5 = {
+    0: "Sin restricción.",
+    1: "Seguimiento anual estándar.",
+    2: "Cláusula de seguimiento trimestral.",
+    3: "Seguro agrícola obligatorio.",
+    4: "Evaluar viabilidad del proyecto.",
+}
+
+def calcular_scoring_5(datos, umbrales_custom=None):
+    """Calcula scoring con 5 niveles de riesgo sobre los 15 indicadores."""
+    from utils.risk_scoring import VALORES_HARDCODED
+    cultivo = datos.get("cultivo","café")
+    valores = VALORES_HARDCODED.get(cultivo, VALORES_HARDCODED["café"]).copy()
+
+    # Sobreescribir con valores calculables desde series
+    tmax = datos.get("temp_max_mensual",[])
+    tmin = datos.get("temp_min_mensual",[])
+    dist = datos.get("distancia_urbana_km")
+    ndvi = datos.get("ndvi_promedio_3a")
+    if tmax:   valores[6]  = round(sum(tmax)/len(tmax),1)
+    if tmin:
+        umb_helada = 10 if cultivo=="café" else 15
+        valores[7] = sum(1 for t in tmin if t < umb_helada)
+    if dist is not None: valores[15] = dist
+    if ndvi is not None: valores[9]  = ndvi
+
+    umb_base = umbrales_custom or UMBRALES_5.get(cultivo, UMBRALES_5["café"])
+    resultados = []
+    scores_por_grupo = {g: [] for g in GRUPOS}
+
+    for ind in INDICADORES:
+        iid   = ind["id"]
+        valor = valores.get(iid, 0.0)
+        umb   = umb_base.get(iid, UMBRALES_5["café"][iid])
+        sc    = _score5(valor, umb, ind["direccion"])
+
+        resultados.append({
+            "id":        iid,
+            "grupo":     ind["grupo"],
+            "nombre":    ind["nombre"],
+            "metrica":   ind["metrica"],
+            "fuente":    ind["fuente"],
+            "pendiente": ind["pendiente"],
+            "unidad":    ind["unidad"],
+            "valor":     valor,
+            "umbrales":  umb,
+            "score":     sc,
+            "label":     SCORE_5_LABEL[sc],
+            "color":     SCORE_5_COLOR[sc],
+            "text":      SCORE_5_TEXT[sc],
+            "decision":  DECISION_5[sc],
+        })
+        scores_por_grupo[ind["grupo"]].append(sc)
+
+    por_grupo = {g: max(vs) if vs else 0 for g, vs in scores_por_grupo.items()}
+    score_global = max(por_grupo.values()) if por_grupo else 0
+
+    return {
+        "resultados":    resultados,
+        "por_grupo":     por_grupo,
+        "score_global":  score_global,
+        "label_global":  SCORE_5_LABEL[score_global],
+        "color_global":  SCORE_5_COLOR[score_global],
+        "text_global":   SCORE_5_TEXT[score_global],
+        "n_extremo": sum(1 for r in resultados if r["score"]==4),
+        "n_alto":    sum(1 for r in resultados if r["score"]==3),
+        "n_medio":   sum(1 for r in resultados if r["score"]==2),
+        "n_bajo":    sum(1 for r in resultados if r["score"]==1),
+        "n_sin":     sum(1 for r in resultados if r["score"]==0),
+    }
+
 # ── Mapas ─────────────────────────────────────────────────────────────────────
 
-def _calc_zoom(gdf_predio):
-    b = gdf_predio.geometry.iloc[0].bounds
+def _calc_zoom(gdf):
+    b = gdf.geometry.iloc[0].bounds
     span = max(b[2]-b[0], b[3]-b[1])
     if span < 0.001: return 18
     if span < 0.003: return 17
@@ -188,16 +331,16 @@ def _calc_zoom(gdf_predio):
     if span < 0.07:  return 13
     return 12
 
-def _base_map(gdf_predio):
-    geom = gdf_predio.geometry.iloc[0]
-    m = folium.Map(location=[geom.centroid.y, geom.centroid.x],
-                   zoom_start=_calc_zoom(gdf_predio), tiles="Esri.WorldImagery")
+def _base_map(gdf):
+    g = gdf.geometry.iloc[0]
+    m = folium.Map(location=[g.centroid.y, g.centroid.x],
+                   zoom_start=_calc_zoom(gdf), tiles="Esri.WorldImagery")
     Fullscreen().add_to(m)
     return m
 
-def _add_predio(m, gdf_predio):
+def _add_predio(m, gdf):
     folium.GeoJson(
-        data=gdf_predio.to_json(), name="Predio",
+        data=gdf.to_json(), name="Predio",
         style_function=lambda _: {"fillColor":"#22c55e","color":"#16a34a",
                                    "weight":2.5,"fillOpacity":0.15},
         tooltip=folium.GeoJsonTooltip(
@@ -206,28 +349,29 @@ def _add_predio(m, gdf_predio):
         ),
     ).add_to(m)
 
-def _fit(m, gdf_predio):
-    b = gdf_predio.geometry.iloc[0].bounds
+def _fit(m, gdf):
+    b = gdf.geometry.iloc[0].bounds
     m.fit_bounds([[b[1],b[0]],[b[3],b[2]]])
 
 def mapa_predio_simple(lat, lon, predio):
     m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
-    folium.Marker([lat, lon], tooltip="Punto ingresado",
-                  icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(m)
+    folium.Marker([lat,lon], tooltip="Punto ingresado",
+                  icon=folium.Icon(color="red",icon="map-marker",prefix="fa")).add_to(m)
     _fit(m, predio["gdf"])
     return m
 
 def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True, mostrar_capa=True,
-              estilo_capa_fn=None, campos_tooltip=None, aliases_tooltip=None, nombre_capa="Capa"):
+              estilo_capa_fn=None, campos_tooltip=None, aliases_tooltip=None,
+              nombre_capa="Capa"):
     m = _base_map(gdf_predio)
-    if mostrar_predio:
-        _add_predio(m, gdf_predio)
+    if mostrar_predio: _add_predio(m, gdf_predio)
     if mostrar_capa and gdf_capa is not None and len(gdf_capa) > 0:
         folium.GeoJson(
             data=gdf_capa.to_json(), name=nombre_capa,
-            style_function=estilo_capa_fn or (lambda _: {"fillColor":"#3b82f6","color":"#2563eb",
-                                                          "weight":1.5,"fillOpacity":0.45}),
+            style_function=estilo_capa_fn or (
+                lambda _: {"fillColor":"#3b82f6","color":"#2563eb",
+                           "weight":1.5,"fillOpacity":0.45}),
             tooltip=folium.GeoJsonTooltip(
                 fields=campos_tooltip or [], aliases=aliases_tooltip or [],
             ) if campos_tooltip else folium.GeoJsonTooltip(fields=[]),
@@ -235,39 +379,38 @@ def mapa_capa(gdf_predio, gdf_capa=None, mostrar_predio=True, mostrar_capa=True,
     _fit(m, gdf_predio)
     return m
 
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 #  HEADER
-# ════════════════════════════════════════════════════════════════════════════
-c1, c2 = st.columns([1, 8])
+# ══════════════════════════════════════════════════════════════════════════════
+c1, c2 = st.columns([1,8])
 with c1: st.markdown("## 🌿")
 with c2:
     st.markdown("## AgroCredito · Plataforma de Evaluación de Predios")
     st.caption("Evaluación agroclimática y productiva para decisiones de crédito agrícola · Colombia")
 st.divider()
 
-# ════════════════════════════════════════════════════════════════════════════
-#  TABS
-# ════════════════════════════════════════════════════════════════════════════
-tab_inicio, tab_validacion, tab_riesgo, tab_monitoreo = st.tabs([
+# ══════════════════════════════════════════════════════════════════════════════
+#  TABS  (3 tabs — Riesgo fusionado en Validación)
+# ══════════════════════════════════════════════════════════════════════════════
+tab_inicio, tab_validacion, tab_monitoreo = st.tabs([
     "🏠 Inicio · Ingreso del Predio",
     "✅ Validación Pre-Crédito",
-    "🌧️ Riesgo Agroclimático",
     "📡 Monitoreo & Forecast",
 ])
 
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 #  TAB 0 · INICIO
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_inicio:
     st.subheader("Datos del predio a evaluar")
 
     c1, c2, c3 = st.columns(3)
-    with c1: lat_input = st.number_input("Latitud",  value=5.07013,  format="%.6f")
-    with c2: lon_input = st.number_input("Longitud", value=-73.55157, format="%.6f")
-    with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café", "plátano"])
+    with c1: lat_input  = st.number_input("Latitud",  value=5.07013,  format="%.6f")
+    with c2: lon_input  = st.number_input("Longitud", value=-73.55157, format="%.6f")
+    with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café","plátano"])
 
     if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
-        caso_m = "Café · Eje Cafetero" if cultivo_in == "café" else "Plátano · Urabá"
+        caso_m = "Café · Eje Cafetero" if cultivo_in=="café" else "Plátano · Urabá"
         st.session_state.update({
             "lat": lat_input, "lon": lon_input, "cultivo": cultivo_in,
             "analizado": True,
@@ -275,14 +418,13 @@ with tab_inicio:
         })
 
     st.markdown("---")
-
     if not st.session_state.get("analizado"):
         st.info("Introduce las coordenadas del predio y pulsa **Analizar predio**.")
         st.stop()
 
     lat     = st.session_state["lat"]
     lon     = st.session_state["lon"]
-    cultivo = st.session_state.get("cultivo", "café")
+    cultivo = st.session_state.get("cultivo","café")
 
     with st.spinner("Consultando base catastral..."):
         predio = get_predio_por_punto(lat, lon)
@@ -294,10 +436,10 @@ with tab_inicio:
     st.session_state["predio"] = predio
 
     st.markdown("#### 🗺️ Identificación del predio catastral")
-    c1, c2, c3, c4 = st.columns(4)
+    c1,c2,c3,c4 = st.columns(4)
     with c1: st.metric("Código catastral", predio["codigo"])
-    with c2: st.metric("Departamento",     predio.get("departamento", "—"))
-    with c3: st.metric("Área catastral",   f"{predio.get('area_ha', '—')} ha")
+    with c2: st.metric("Departamento",     predio.get("departamento","—"))
+    with c3: st.metric("Área catastral",   f"{predio.get('area_ha','—')} ha")
     with c4: st.metric("Cultivo",          cultivo.capitalize())
 
     st_folium(mapa_predio_simple(lat, lon, predio),
@@ -305,67 +447,66 @@ with tab_inicio:
     st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
 
     import json as _json
-    geojson_str = _json.dumps(predio["geojson"], ensure_ascii=False, indent=2)
     st.download_button(
         label="⬇️ Descargar GeoJSON del predio",
-        data=geojson_str,
+        data=_json.dumps(predio["geojson"], ensure_ascii=False, indent=2),
         file_name=f"predio_{predio['codigo']}.geojson",
         mime="application/geo+json",
     )
 
     st.markdown("---")
-    st.markdown("👉 Navega a **Eligibilidad** para el análisis detallado del predio.")
+    st.markdown("👉 Navega a **Validación Pre-Crédito** para el análisis detallado.")
 
-# ════════════════════════════════════════════════════════════════════════════
-#  TAB 1 · ELIGIBILIDAD
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+#  TAB 1 · VALIDACIÓN PRE-CRÉDITO
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_validacion:
     predio  = st.session_state.get("predio")
     d       = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-    cultivo = st.session_state.get("cultivo", d.get("cultivo", "café"))
+    cultivo = st.session_state.get("cultivo", d.get("cultivo","café"))
 
     if predio is None:
         st.info("Primero analiza un predio en el tab **Inicio**.")
         st.stop()
 
-    # ── Título dinámico: municipio y departamento desde el predio catastral ──
-    municipio_real    = predio.get("municipio", "")
-    departamento_real = predio.get("departamento", "")
+    municipio_real    = predio.get("municipio","")
+    departamento_real = predio.get("departamento","")
     ubicacion_label   = (
         f"{municipio_real}, {departamento_real}"
         if municipio_real and departamento_real
-        else municipio_real or departamento_real or d.get("municipio", "")
+        else municipio_real or departamento_real or d.get("municipio","")
     )
-    st.subheader(f"Evaluación de Eligibilidad · {cultivo.capitalize()} · {ubicacion_label}")
+    st.subheader(f"Validación Pre-Crédito · {cultivo.capitalize()} · {ubicacion_label}")
+
+    MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
     # ════════════════════════════════════════════════════════════════════
     #  A · VALIDACIÓN GEOMÉTRICA Y LEGAL
     # ════════════════════════════════════════════════════════════════════
     st.markdown("### 📐 A · Validación Geométrica y Legal")
 
-    # ── A1 · Zona Agrícola (Frontera) ─────────────────────────────────────
     with st.expander("🌿 A1 · Zona Agrícola (Frontera)", expanded=True):
         with st.spinner("Cargando frontera agrícola..."):
             gdf_frontera = get_frontera(predio["gdf"])
         st.session_state["gdf_frontera"] = gdf_frontera
 
-        col1, col2 = st.columns(2)
-        with col1: ver_predio_a2   = st.checkbox("🟢 Predio",           value=True, key="a2_predio")
-        with col2: ver_frontera_a2 = st.checkbox("🟩 Frontera agrícola", value=True, key="a2_front")
+        c1,c2 = st.columns(2)
+        with c1: ver_predio_a2   = st.checkbox("🟢 Predio",            value=True, key="a2_predio")
+        with c2: ver_frontera_a2 = st.checkbox("🟩 Frontera agrícola", value=True, key="a2_front")
 
         def estilo_frontera(feature):
-            color = COLORES_FRONTERA.get(feature["properties"].get("tipo_condi",""), "#d97706")
-            return {"fillColor": color, "color": color, "weight": 2, "fillOpacity": 0.40}
+            color = COLORES_FRONTERA.get(
+                feature["properties"].get("tipo_condi",""), "#d97706")
+            return {"fillColor":color,"color":color,"weight":2,"fillOpacity":0.40}
 
-        m_a2 = mapa_capa(
+        st_folium(mapa_capa(
             predio["gdf"], gdf_frontera,
             mostrar_predio=ver_predio_a2, mostrar_capa=ver_frontera_a2,
             estilo_capa_fn=estilo_frontera,
             campos_tooltip=["tipo_condi","area_ha","pct_predio"],
             aliases_tooltip=["Tipo","Área (ha)","% predio"],
             nombre_capa="Frontera agrícola",
-        )
-        st_folium(m_a2, width=700, height=380, returned_objects=[], key="map_a2")
+        ), width=700, height=380, returned_objects=[], key="map_a2")
 
         if gdf_frontera is not None and len(gdf_frontera) > 0:
             df_front = gdf_frontera.groupby("tipo_condi").agg(
@@ -373,46 +514,40 @@ with tab_validacion:
             ).reset_index().rename(columns={"tipo_condi":"Tipo de zona",
                                             "area_ha":"Área (ha)","pct_predio":"% del predio"})
             st.dataframe(df_front, use_container_width=True, hide_index=True)
-            tipos = gdf_frontera["tipo_condi"].unique().tolist()
-            nivel = "verde" if all("condicionada" not in t.lower() and "protegida" not in t.lower()
-                                   for t in tipos) else "naranja"
+            tipos  = gdf_frontera["tipo_condi"].unique().tolist()
+            nivel  = "verde" if all("condicionada" not in t.lower() and
+                                    "protegida" not in t.lower() for t in tipos) else "naranja"
             semaforo(f"Zona agrícola: **{', '.join(tipos)}**", nivel)
         else:
             st.warning("No se encontró información de frontera agrícola para este predio.")
 
-    # ── A2 · Área Efectiva Cultivable ─────────────────────────────────────
     with st.expander("📏 A2 · Área Efectiva Cultivable", expanded=True):
 
-        # ── A2-A · Análisis del Terreno ───────────────────────────────────
         st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
         st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
 
         slope_threshold_pct = st.slider(
             "Umbral de pendiente no cultivable (%)",
-            min_value=3, max_value=75, value=25, step=1,
-            key="slope_threshold",
+            min_value=3, max_value=75, value=25, step=1, key="slope_threshold",
         )
-        slope_threshold = float(slope_threshold_pct)
 
         if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
             st.session_state["terrain"] = None
             with st.spinner("Descargando DEM y calculando terreno..."):
                 try:
-                    terrain = get_terrain_analysis(predio["gdf"], slope_threshold)
+                    terrain = get_terrain_analysis(predio["gdf"], float(slope_threshold_pct))
                     st.session_state["terrain"] = terrain
                 except Exception as e:
                     st.error(f"❌ Error al obtener datos de terreno: {e}")
 
         terrain = st.session_state.get("terrain")
-
         if terrain is None:
-            st.info("Pulsa **Calcular terreno** para descargar el DEM del predio desde EOSDA API.")
+            st.info("Pulsa **Calcular terreno** para descargar el DEM desde EOSDA API.")
         else:
             s    = terrain["stats"]
             maps = terrain["maps"]
-
             st.markdown("**Estadísticas del predio**")
-            c1, c2, c3, c4, c5 = st.columns(5)
+            c1,c2,c3,c4,c5 = st.columns(5)
             with c1: kpi("Elevación mínima",  f"{s['elev_min']:.0f}",   "m")
             with c2: kpi("Elevación media",   f"{s['elev_mean']:.0f}",  "m")
             with c3: kpi("Elevación máxima",  f"{s['elev_max']:.0f}",   "m")
@@ -420,7 +555,7 @@ with tab_validacion:
             with c5: kpi("Aspecto dominante", s["aspect_dominant"])
             st.markdown("---")
 
-            c1, c2 = st.columns(2)
+            c1,c2 = st.columns(2)
             with c1:
                 st.markdown("**🏔️ Elevación (DEM)**")
                 st_folium(maps["dem_map"], width=420, height=340,
@@ -444,7 +579,7 @@ with tab_validacion:
                     ticks=["0%","10%","20%","30%","40%","50%+"],
                 ), unsafe_allow_html=True)
 
-            c3, c4 = st.columns(2)
+            c3,c4 = st.columns(2)
             with c3:
                 st.markdown("**🧭 Aspecto (Orientación)**")
                 st_folium(maps["aspect_map"], width=420, height=340,
@@ -479,25 +614,21 @@ with tab_validacion:
                 marker_color=["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"],
                 text=[f"{v:.1f}%" for v in valores], textposition="outside",
             ))
-            fig_cls.update_layout(
-                height=260, margin=dict(t=20,b=60,l=10,r=10),
-                yaxis=dict(title="% del área", range=[0, max(valores)*1.2]),
-                xaxis=dict(tickangle=-20), showlegend=False,
-            )
+            fig_cls.update_layout(height=260, margin=dict(t=20,b=60,l=10,r=10),
+                                   yaxis=dict(title="% del área", range=[0,max(valores)*1.2]),
+                                   xaxis=dict(tickangle=-20), showlegend=False)
             st.plotly_chart(fig_cls, use_container_width=True)
             st.session_state["area_pendiente_excluida_ha"] = s["area_no_cultivable_ha"]
 
         st.markdown("---")
 
-        # ── A2-B · Análisis de Construcciones ────────────────────────────
         st.markdown("#### 🏗️ A2-B · Análisis de Construcciones")
-
         with st.spinner("Cargando construcciones..."):
             gdf_const = get_construcciones(predio["gdf"])
         st.session_state["gdf_construcciones"] = gdf_const
 
         if gdf_const is None or len(gdf_const) == 0:
-            st.info("No se han identificado construcciones dentro del predio en el catastro.")
+            st.info("No se han identificado construcciones dentro del predio.")
             area_const_real = 0.0
         else:
             df_const = gdf_const[["codigo","identifica","tipo_const","numero_pis","area_ha"]].copy()
@@ -505,11 +636,10 @@ with tab_validacion:
             st.dataframe(df_const, use_container_width=True, hide_index=True)
             area_const_real = float(gdf_const["area_ha"].sum())
             kpi("Área total construida", f"{area_const_real:.4f}", "ha")
-
-            col1, col2 = st.columns(2)
-            with col1: ver_predio_c = st.checkbox("🟢 Predio",         value=True, key="c_predio")
-            with col2: ver_const_c  = st.checkbox("🟠 Construcciones", value=True, key="c_const")
-            m_c = mapa_capa(
+            c1,c2 = st.columns(2)
+            with c1: ver_predio_c = st.checkbox("🟢 Predio",         value=True, key="c_predio")
+            with c2: ver_const_c  = st.checkbox("🟠 Construcciones", value=True, key="c_const")
+            st_folium(mapa_capa(
                 predio["gdf"], gdf_const,
                 mostrar_predio=ver_predio_c, mostrar_capa=ver_const_c,
                 estilo_capa_fn=lambda _: {"fillColor":"#f97316","color":"#ea580c",
@@ -517,14 +647,13 @@ with tab_validacion:
                 campos_tooltip=["identifica","tipo_const","area_ha"],
                 aliases_tooltip=["Identificación","Tipo","Área (ha)"],
                 nombre_capa="Construcciones",
-            )
-            st_folium(m_c, width=700, height=350, returned_objects=[], key="map_const")
+            ), width=700, height=350, returned_objects=[], key="map_const")
 
-        st.session_state["area_construcciones_ha"] = area_const_real if gdf_const is not None else 0.0
+        st.session_state["area_construcciones_ha"] = (
+            area_const_real if gdf_const is not None else 0.0)
 
         st.markdown("---")
 
-        # ── A2-C · Análisis NDVI ──────────────────────────────────────────
         st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
         st.caption("Sentinel-2 · Mediana NDVI anual · Zonas con NDVI < umbral se excluyen del área efectiva")
 
@@ -533,32 +662,28 @@ with tab_validacion:
             min_value=0.10, max_value=0.60, value=0.25, step=0.05,
             format="%.2f", key="ndvi_threshold",
         )
-        st.caption("< 0.10: suelo desnudo  ·  0.10–0.25: vegetación muy escasa  ·  0.25–0.50: moderada  ·  > 0.50: densa")
 
         if st.button("🔄 Calcular NDVI histórico", type="primary", key="btn_ndvi"):
             st.session_state["ndvi_result"] = None
-            with st.spinner("Descargando estadísticas NDVI (Sentinel-2, último año)..."):
+            with st.spinner("Descargando estadísticas NDVI (Sentinel-2)..."):
                 try:
                     ndvi_result = get_ndvi_analysis(
-                        predio["gdf"], ndvi_threshold=ndvi_threshold, n_months=12
-                    )
+                        predio["gdf"], ndvi_threshold=ndvi_threshold, n_months=12)
                     st.session_state["ndvi_result"] = ndvi_result
                 except Exception as e:
                     st.error(f"❌ Error al obtener NDVI: {e}")
 
         ndvi_result = st.session_state.get("ndvi_result")
-
         if ndvi_result is None:
             st.info("Pulsa **Calcular NDVI histórico** para descargar datos de Sentinel-2.")
         else:
-            c1, c2, c3, c4 = st.columns(4)
+            c1,c2,c3,c4 = st.columns(4)
             with c1: kpi("NDVI mediano anual", f"{ndvi_result['ndvi_median']:.3f}" if ndvi_result['ndvi_median'] else "—")
             with c2: kpi("NDVI mínimo",        f"{ndvi_result['ndvi_min']:.3f}"    if ndvi_result['ndvi_min']    else "—")
             with c3: kpi("NDVI máximo",        f"{ndvi_result['ndvi_max']:.3f}"    if ndvi_result['ndvi_max']    else "—")
-            with c4: kpi("Escenas sin nubes",  ndvi_result['n_scenes'])
-
+            with c4: kpi("Escenas sin nubes",  ndvi_result["n_scenes"])
             st.markdown("---")
-            c1, c2 = st.columns(2)
+            c1,c2 = st.columns(2)
             with c1:
                 st.markdown("**🛰️ NDVI mediano anual**")
                 st_folium(ndvi_result["maps"]["ndvi_map"], width=420, height=340,
@@ -582,10 +707,8 @@ with tab_validacion:
                     f'<span style="font-size:0.82rem">Bajo umbral · {ndvi_result["area_low_ha"]} ha ({ndvi_result["pct_low"]}%)</span></div>'
                     '</div>', unsafe_allow_html=True,
                 )
-
-            if ndvi_result["stats"]:
-                import pandas as _pd
-                df_ndvi_ts = _pd.DataFrame(ndvi_result["stats"]).sort_values("date")
+            if ndvi_result.get("stats"):
+                df_ndvi_ts = pd.DataFrame(ndvi_result["stats"]).sort_values("date")
                 fig_ts = go.Figure()
                 fig_ts.add_trace(go.Scatter(
                     x=df_ndvi_ts["date"], y=df_ndvi_ts["median"],
@@ -594,18 +717,17 @@ with tab_validacion:
                 ))
                 if "p90" in df_ndvi_ts.columns and "p10" in df_ndvi_ts.columns:
                     fig_ts.add_trace(go.Scatter(
-                        x=df_ndvi_ts["date"].tolist() + df_ndvi_ts["date"].tolist()[::-1],
-                        y=df_ndvi_ts["p90"].tolist() + df_ndvi_ts["p10"].tolist()[::-1],
+                        x=df_ndvi_ts["date"].tolist()+df_ndvi_ts["date"].tolist()[::-1],
+                        y=df_ndvi_ts["p90"].tolist()+df_ndvi_ts["p10"].tolist()[::-1],
                         fill="toself", fillcolor="rgba(22,163,74,0.15)",
                         line=dict(color="rgba(0,0,0,0)"), name="Rango P10–P90",
                     ))
                 fig_ts.add_hline(y=ndvi_threshold, line_dash="dash", line_color="#dc2626",
                                  annotation_text=f"Umbral {ndvi_threshold:.2f}")
-                fig_ts.update_layout(
-                    title="Serie temporal NDVI (escenas sin nubes, último año)",
-                    height=280, margin=dict(t=40,b=20),
-                    xaxis=dict(title="Fecha"), yaxis=dict(title="NDVI", range=[-0.1,1.0]),
-                )
+                fig_ts.update_layout(title="Serie temporal NDVI (último año)",
+                                     height=280, margin=dict(t=40,b=20),
+                                     xaxis=dict(title="Fecha"),
+                                     yaxis=dict(title="NDVI", range=[-0.1,1.0]))
                 st.plotly_chart(fig_ts, use_container_width=True)
 
             st.session_state["area_ndvi_bajo_ha"] = ndvi_result["area_low_ha"]
@@ -613,46 +735,41 @@ with tab_validacion:
 
         st.markdown("---")
 
-        # ── Resultado: Área Efectiva Cultivable ───────────────────────────
         st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
-
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: ver_predio_a1 = st.checkbox("🟢 Predio",            value=True, key="a1_predio")
-        with col2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral",  value=True, key="a1_pend")
-        with col3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",   value=True, key="a1_ndvi")
-        with col4: ver_const_a1  = st.checkbox("🟠 Construcciones",     value=True, key="a1_const")
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: ver_predio_a1 = st.checkbox("🟢 Predio",           value=True, key="a1_predio")
+        with c2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral", value=True, key="a1_pend")
+        with c3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",  value=True, key="a1_ndvi")
+        with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
 
         area_total = predio.get("area_ha", d["area_total_ha"])
-
         area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
         area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
         area_const = st.session_state.get("area_construcciones_ha",     d["area_construcciones_ha"])
         _slope_pct = st.session_state.get("slope_threshold",  25)
         _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
-
-        _terrain  = st.session_state.get("terrain")
-        _ndvi_res = st.session_state.get("ndvi_result")
-        _s_mask   = _terrain.get("no_cultivable_mask") if _terrain  else None
-        _n_mask   = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
+        _terrain   = st.session_state.get("terrain")
+        _ndvi_res  = st.session_state.get("ndvi_result")
+        _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
+        _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
 
         if _s_mask is not None and _n_mask is not None:
             from PIL import Image as _Im
-            h, w    = _s_mask.shape
-            _nr     = np.array(_Im.fromarray(_n_mask.astype(np.uint8)).resize(
-                          (w, h), _Im.NEAREST)).astype(bool)
-            _union  = _s_mask | _nr
-            area_excluida = float(_union.sum() / _union.size * area_total) + area_const
+            h, w   = _s_mask.shape
+            _nr    = np.array(_Im.fromarray(_n_mask.astype(np.uint8)).resize(
+                         (w, h), _Im.NEAREST)).astype(bool)
+            _union = _s_mask | _nr
+            area_excluida = float(_union.sum()/_union.size*area_total) + area_const
             metodo = "exacto (unión pendiente + NDVI)"
         else:
             area_excluida = area_pend + area_ndvi + area_const
             metodo = "aproximado (calcular A2-A y A2-C para resultado exacto)"
 
         area_ef = round(max(area_total - area_excluida, 0), 2)
-        pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+        pct_ef  = round(area_ef/area_total*100) if area_total > 0 else 0
 
         m_a1 = _base_map(predio["gdf"])
-        if ver_predio_a1:
-            _add_predio(m_a1, predio["gdf"])
+        if ver_predio_a1: _add_predio(m_a1, predio["gdf"])
         if ver_pendiente:
             geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
             if not geom_pend.is_empty:
@@ -666,7 +783,7 @@ with tab_validacion:
             geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
             if not geom_ndvi.is_empty:
                 gdf_ndvi_viz = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
-                                             geometry=[geom_ndvi], crs="EPSG:4326")
+                                                 geometry=[geom_ndvi], crs="EPSG:4326")
                 folium.GeoJson(data=gdf_ndvi_viz.to_json(),
                                style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
                                                           "weight":1,"fillOpacity":0.5},
@@ -674,7 +791,7 @@ with tab_validacion:
         _fit(m_a1, predio["gdf"])
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
-        c_left, c_right = st.columns([2, 1])
+        c_left, c_right = st.columns([2,1])
         with c_left:
             solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
             df_area = pd.DataFrame({
@@ -686,26 +803,22 @@ with tab_validacion:
                     f"  ↳ Solapamiento evitado ({metodo})",
                     "✅ Área efectiva cultivable",
                 ],
-                "Hectáreas": [
-                    area_total, -area_pend, -area_ndvi, -area_const,
-                    solapamiento, area_ef,
-                ],
+                "Hectáreas": [area_total,-area_pend,-area_ndvi,-area_const,
+                              solapamiento,area_ef],
             })
             st.dataframe(
-                df_area.style.apply(
-                    lambda x: [
-                        "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
-                        "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
-                        for v in x
-                    ], axis=1),
+                df_area.style.apply(lambda x: [
+                    "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
+                    "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
+                    for v in x], axis=1),
                 use_container_width=True, hide_index=True,
             )
         with c_right:
-            st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
+            st.plotly_chart(gauge_riesgo(pct_ef,"% Área efectiva"), use_container_width=True)
             kpi("Área efectiva", area_ef, "ha")
 
     # ════════════════════════════════════════════════════════════════════
-    #  B · VALIDACIÓN CONTINUIDAD PRODUCTIVA
+    #  B · CONTINUIDAD PRODUCTIVA
     # ════════════════════════════════════════════════════════════════════
     st.markdown("### 🌱 B · Validación de Continuidad Productiva")
 
@@ -714,23 +827,22 @@ with tab_validacion:
             gdf_aptitud = get_aptitud(predio["gdf"], cultivo)
         st.session_state["gdf_aptitud"] = gdf_aptitud
 
-        col1, col2 = st.columns(2)
-        with col1: ver_predio_b1  = st.checkbox("🟢 Predio",  value=True, key="b1_predio")
-        with col2: ver_aptitud_b1 = st.checkbox("🟦 Aptitud", value=True, key="b1_apt")
+        c1,c2 = st.columns(2)
+        with c1: ver_predio_b1  = st.checkbox("🟢 Predio",  value=True, key="b1_predio")
+        with c2: ver_aptitud_b1 = st.checkbox("🟦 Aptitud", value=True, key="b1_apt")
 
         def estilo_aptitud(feature):
             color = COLORES_APTITUD.get(feature["properties"].get("aptitud",""), "#3b82f6")
-            return {"fillColor": color, "color": color, "weight": 1.5, "fillOpacity": 0.45}
+            return {"fillColor":color,"color":color,"weight":1.5,"fillOpacity":0.45}
 
-        m_b1 = mapa_capa(
+        st_folium(mapa_capa(
             predio["gdf"], gdf_aptitud,
             mostrar_predio=ver_predio_b1, mostrar_capa=ver_aptitud_b1,
             estilo_capa_fn=estilo_aptitud,
             campos_tooltip=["aptitud","area_ha","pct_predio"],
             aliases_tooltip=["Aptitud","Área (ha)","% predio"],
             nombre_capa="Aptitud cultivo",
-        )
-        st_folium(m_b1, width=700, height=380, returned_objects=[], key="map_b1")
+        ), width=700, height=380, returned_objects=[], key="map_b1")
 
         if gdf_aptitud is not None and len(gdf_aptitud) > 0:
             df_apt = gdf_aptitud.groupby("aptitud").agg(
@@ -746,46 +858,44 @@ with tab_validacion:
             gdf_vp = get_valor_potencial(predio["gdf"])
         st.session_state["gdf_valor_potencial"] = gdf_vp
 
-        col1, col2 = st.columns(2)
-        with col1: ver_predio_b2 = st.checkbox("🟢 Predio",         value=True, key="b2_predio")
-        with col2: ver_vp_b2     = st.checkbox("🟦 Valor potencial", value=True, key="b2_vp")
+        c1,c2 = st.columns(2)
+        with c1: ver_predio_b2 = st.checkbox("🟢 Predio",          value=True, key="b2_predio")
+        with c2: ver_vp_b2     = st.checkbox("🟦 Valor potencial",  value=True, key="b2_vp")
 
         def estilo_vp(feature):
             color = color_ufh(feature["properties"].get("clase_ufh",""))
-            return {"fillColor": color, "color": color, "weight": 1.5, "fillOpacity": 0.45}
+            return {"fillColor":color,"color":color,"weight":1.5,"fillOpacity":0.45}
 
-        m_b2 = mapa_capa(
+        st_folium(mapa_capa(
             predio["gdf"], gdf_vp,
             mostrar_predio=ver_predio_b2, mostrar_capa=ver_vp_b2,
             estilo_capa_fn=estilo_vp,
             campos_tooltip=["clase_ufh","area_ha","pct_predio"],
             aliases_tooltip=["Clase UFH","Área (ha)","% predio"],
             nombre_capa="Valor potencial",
-        )
-        st_folium(m_b2, width=700, height=380, returned_objects=[], key="map_b2")
+        ), width=700, height=380, returned_objects=[], key="map_b2")
 
         if gdf_vp is not None and len(gdf_vp) > 0:
             df_vp = gdf_vp.groupby("clase_ufh").agg(
                 area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
             ).reset_index().sort_values("clase_ufh").rename(
-                columns={"clase_ufh":"Clase UFH","area_ha":"Área (ha)","pct_predio":"% del predio"})
+                columns={"clase_ufh":"Clase UFH","area_ha":"Área (ha)",
+                         "pct_predio":"% del predio"})
             st.dataframe(df_vp, use_container_width=True, hide_index=True)
             st.caption("Clase 01–04: alto potencial 🟢 · 05–08: medio 🟡 · 09+: bajo 🔴")
         else:
-            st.warning("No se encontró información de valor potencial para este predio.")
+            st.warning("No se encontró información de valor potencial.")
 
     with st.expander("📊 B3 · Actividad Productiva (NDVI)", expanded=True):
         st.caption("⚠️ Datos hardcoded · Se conectará a EOSDA API en la próxima versión")
         ndvi = MOCK_NDVI
-        c1, c2, c3 = st.columns(3)
+        c1,c2,c3 = st.columns(3)
         with c1: kpi("NDVI promedio 3 años", ndvi["ndvi_promedio"])
         with c2: kpi("Umbral NDVI", ndvi["umbral_ndvi"])
         with c3:
             ndvi_ok = ndvi["ndvi_promedio"] >= ndvi["umbral_ndvi"]
             kpi("Actividad productiva", "✅ Activa" if ndvi_ok else "⚠️ Por verificar")
-
-        meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-        fig_ndvi = px.line(x=meses, y=d["ndvi_mensual_hist"],
+        fig_ndvi = px.line(x=MESES, y=d["ndvi_mensual_hist"],
                            labels={"x":"Mes","y":"NDVI"},
                            title="Serie NDVI mensual (últimos 12 meses)",
                            color_discrete_sequence=["#16a34a"])
@@ -799,170 +909,313 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     with st.expander("🏗️ C · Validación de Infraestructura Productiva", expanded=False):
         st.caption("⚠️ Datos hardcoded · Se conectará a PostGIS en la próxima versión")
-        c1, c2 = st.columns(2)
+        c1,c2 = st.columns(2)
+        dist = d["distancia_urbana_km"]
         with c1:
             kpi("Construcciones identificadas", d["construcciones_n"], "unidades")
             st.caption(f"**Detalle:** {d['construcciones_desc']}")
         with c2:
-            dist = d["distancia_urbana_km"]
             kpi("Distancia a zona urbana", dist, "km")
-            semaforo(f"Acceso {'adecuado' if dist < 20 else 'limitado'} ({dist} km).",
-                     "verde" if dist < 20 else "naranja")
+            semaforo(f"Acceso {'adecuado' if dist<20 else 'limitado'} ({dist} km).",
+                     "verde" if dist<20 else "naranja")
 
     # ════════════════════════════════════════════════════════════════════
-    #  E · SCORING DE RIESGO AGROCLIMÁTICO
+    #  D · ANÁLISIS DE RIESGO AGROCLIMÁTICO
     # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 🌧️ E · Scoring de Riesgo Agroclimático")
-    st.caption("15 indicadores en 6 grupos · umbrales estándar por cultivo · MVP hardcoded")
+    st.markdown("### 🌧️ D · Análisis de Riesgo Agroclimático")
+    st.caption("Series históricas · Matriz de vulnerabilidad con umbrales editables · Scoring 15 indicadores")
 
-    scoring = score_riesgo(d)
-    st.session_state["scoring"] = scoring
-    sg = scoring["score_global"]
+    with st.expander("📊 D1 · Series Climáticas Históricas", expanded=True):
+        c1,c2 = st.columns(2)
+        with c1:
+            fig_p = px.bar(x=MESES, y=d["precip_mensual"],
+                           labels={"x":"Mes","y":"mm"},
+                           title="Precipitación media mensual (mm)",
+                           color_discrete_sequence=["#3b82f6"])
+            fig_p.update_layout(height=260, margin=dict(t=40,b=20))
+            st.plotly_chart(fig_p, use_container_width=True)
+        with c2:
+            fig_t = go.Figure()
+            fig_t.add_trace(go.Scatter(x=MESES, y=d["temp_max_mensual"],
+                                       name="T_máx", line=dict(color="#ef4444")))
+            fig_t.add_trace(go.Scatter(x=MESES, y=d["temp_min_mensual"],
+                                       name="T_mín", line=dict(color="#3b82f6"),
+                                       fill="tonexty",
+                                       fillcolor="rgba(59,130,246,0.1)"))
+            fig_t.update_layout(title="Temperatura mensual (°C)",
+                                 height=260, margin=dict(t=40,b=20))
+            st.plotly_chart(fig_t, use_container_width=True)
 
-    st.markdown(
-        f'<div style="background:{SCORE_COLOR[sg]};border-left:6px solid {SCORE_TEXT[sg]};'
-        f'padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
-        f'<b style="font-size:1.05rem;color:{SCORE_TEXT[sg]}">Riesgo global: {SCORE_LABEL[sg]}</b>'
-        f'&nbsp;&nbsp;<span style="font-size:0.85rem;color:{SCORE_TEXT[sg]}">'
-        f'🔴 {scoring["n_alto"]} alto · 🟡 {scoring["n_medio"]} medio · 🟢 {scoring["n_bajo"]} bajo'
-        f'</span></div>',
-        unsafe_allow_html=True,
-    )
+        fig_ndvi2 = px.line(x=MESES, y=d["ndvi_mensual_hist"],
+                            labels={"x":"Mes","y":"NDVI"},
+                            title="NDVI mensual histórico",
+                            color_discrete_sequence=["#16a34a"])
+        fig_ndvi2.add_hline(y=d["ndvi_umbral"], line_dash="dash", line_color="#dc2626",
+                            annotation_text=f"Umbral {d['ndvi_umbral']}")
+        fig_ndvi2.update_layout(height=220, margin=dict(t=40,b=20))
+        st.plotly_chart(fig_ndvi2, use_container_width=True)
 
-    cols_e = st.columns(len(GRUPOS))
-    for col_e, grupo in zip(cols_e, GRUPOS):
-        sc_g = scoring["por_grupo"][grupo]
-        col_e.markdown(
-            f'<div style="background:{SCORE_COLOR[sc_g]};border:1px solid {SCORE_TEXT[sc_g]};'
-            f'border-radius:6px;padding:0.5rem 0.3rem;text-align:center;margin:2px">'
-            f'<div style="font-size:0.68rem;color:{SCORE_TEXT[sc_g]};font-weight:600;line-height:1.3">{grupo}</div>'
-            f'<div style="font-size:0.92rem;font-weight:700;color:{SCORE_TEXT[sc_g]}">{SCORE_LABEL[sc_g]}</div>'
-            f'</div>',
+    with st.expander("⚙️ D2 · Matriz de Vulnerabilidad — Umbrales por Indicador", expanded=True):
+        st.caption(
+            "Los umbrales definen los niveles **Sin riesgo / Bajo / Medio / Alto / Extremo** "
+            "para cada indicador. Selecciona el cultivo para cargar los valores predefinidos, "
+            "o edítalos directamente en la tabla."
+        )
+
+        col_cult, col_reset = st.columns([2,1])
+        with col_cult:
+            cultivo_umb = st.selectbox(
+                "Cultivo para umbrales predefinidos",
+                ["café","plátano"],
+                index=0 if cultivo=="café" else 1,
+                key="cultivo_umbrales",
+            )
+        with col_reset:
+            st.markdown("<div style='margin-top:1.8rem'>", unsafe_allow_html=True)
+            reset_umb = st.button("🔄 Restablecer predefinidos", key="reset_umbrales")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Inicializar o restablecer umbrales en session_state
+        if reset_umb or "umbrales_edit" not in st.session_state:
+            st.session_state["umbrales_edit"] = {
+                iid: list(vals)
+                for iid, vals in UMBRALES_5[cultivo_umb].items()
+            }
+
+        # Construir DataFrame para el editor
+        umb_rows = []
+        for ind in INDICADORES:
+            iid = ind["id"]
+            u   = st.session_state["umbrales_edit"].get(iid, UMBRALES_5["café"][iid])
+            umb_rows.append({
+                "ID":           iid,
+                "Grupo":        ind["grupo"],
+                "Indicador":    ind["nombre"],
+                "Unidad":       ind["unidad"],
+                "Sin riesgo <": u[0],
+                "Bajo <":       u[1],
+                "Medio <":      u[2],
+                "Alto <":       u[3],
+                "Extremo ≥":    u[3],   # informativo, = Alto
+                "Fuente":       ind["fuente"],
+                "API":          "✅" if ind["api"] else "⚠️ Estático",
+                "Estado":       "⏳ pendiente" if ind["pendiente"] else "✅ activo",
+            })
+
+        df_umb = pd.DataFrame(umb_rows)
+        df_edit = st.data_editor(
+            df_umb[["ID","Grupo","Indicador","Unidad",
+                    "Sin riesgo <","Bajo <","Medio <","Alto <",
+                    "Fuente","API","Estado"]],
+            use_container_width=True, hide_index=True,
+            disabled=["ID","Grupo","Indicador","Unidad","Fuente","API","Estado"],
+            key="editor_umbrales",
+        )
+
+        # Sincronizar edits al session_state
+        for _, row in df_edit.iterrows():
+            iid = int(row["ID"])
+            st.session_state["umbrales_edit"][iid] = [
+                row["Sin riesgo <"], row["Bajo <"],
+                row["Medio <"],      row["Alto <"],
+                row["Alto <"],  # extremo = umbral alto (misma cota superior)
+            ]
+
+        # Leyenda visual de niveles
+        st.markdown(
+            '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap">'
+            + "".join([
+                f'<div style="background:{SCORE_5_COLOR[i]};color:{SCORE_5_TEXT[i]};'
+                f'padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:600">'
+                f'{SCORE_5_LABEL[i]}</div>'
+                for i in range(5)
+            ])
+            + "</div>",
             unsafe_allow_html=True,
         )
 
-    st.markdown("")
+    with st.expander("🎯 D3 · Resultados del Scoring", expanded=True):
+        if st.button("🔍 Calcular scoring de riesgo", type="primary",
+                     use_container_width=True, key="btn_scoring"):
+            umbrales_final = st.session_state.get("umbrales_edit",
+                                                   UMBRALES_5.get(cultivo, UMBRALES_5["café"]))
+            scoring = calcular_scoring_5(d, umbrales_final)
+            st.session_state["scoring"] = scoring
 
-    with st.expander("📊 Detalle de los 15 indicadores", expanded=False):
-        df_sc = pd.DataFrame([{
-            "#": r["id"],
-            "Grupo": r["grupo"],
-            "Indicador": r["nombre"],
-            "Valor": r["valor"],
-            "Unidad": r["unidad"],
-            "Score": r["score_label"],
-            "Decisión": r["decision"],
-        } for r in scoring["resultados"]])
-        st.dataframe(df_sc, use_container_width=True, hide_index=True)
+        scoring = st.session_state.get("scoring")
+
+        if scoring is None:
+            st.info("Pulsa **Calcular scoring de riesgo** para ver los resultados.")
+        else:
+            sg = scoring["score_global"]
+
+            # Banner global
+            st.markdown(
+                f'<div style="background:{SCORE_5_COLOR[sg]};border-left:6px solid '
+                f'{SCORE_5_TEXT[sg]};padding:0.9rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
+                f'<b style="font-size:1.1rem;color:{SCORE_5_TEXT[sg]}">'
+                f'Riesgo global: {SCORE_5_LABEL[sg]}</b>'
+                f'<span style="font-size:0.82rem;color:{SCORE_5_TEXT[sg]};margin-left:1rem">'
+                f'🚨 {scoring["n_extremo"]} extremo · '
+                f'🔴 {scoring["n_alto"]} alto · '
+                f'🟡 {scoring["n_medio"]} medio · '
+                f'🟢 {scoring["n_bajo"]} bajo · '
+                f'🟢 {scoring["n_sin"]} sin riesgo'
+                f'</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            # Scores por grupo
+            cols_g = st.columns(len(GRUPOS))
+            for col_g, grupo in zip(cols_g, GRUPOS):
+                sc_g = scoring["por_grupo"][grupo]
+                col_g.markdown(
+                    f'<div style="background:{SCORE_5_COLOR[sc_g]};'
+                    f'border:1px solid {SCORE_5_TEXT[sc_g]};border-radius:6px;'
+                    f'padding:0.5rem 0.3rem;text-align:center;margin:2px">'
+                    f'<div style="font-size:0.65rem;color:{SCORE_5_TEXT[sc_g]};'
+                    f'font-weight:600;line-height:1.3">{grupo}</div>'
+                    f'<div style="font-size:0.88rem;font-weight:700;'
+                    f'color:{SCORE_5_TEXT[sc_g]}">{SCORE_5_LABEL[sc_g]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("")
+
+            # Tabla detallada por grupo
+            for grupo in GRUPOS:
+                filas = [r for r in scoring["resultados"] if r["grupo"]==grupo]
+                if not filas: continue
+                sc_g = scoring["por_grupo"][grupo]
+                st.markdown(
+                    f'<div style="background:{SCORE_5_COLOR[sc_g]};border-left:4px solid '
+                    f'{SCORE_5_TEXT[sc_g]};padding:4px 10px;border-radius:4px;'
+                    f'margin:6px 0 3px 0">'
+                    f'<b style="color:{SCORE_5_TEXT[sc_g]}">{grupo}</b>'
+                    f'<span style="font-size:0.8rem;margin-left:8px;color:{SCORE_5_TEXT[sc_g]}">'
+                    f'{SCORE_5_LABEL[sc_g]}</span></div>',
+                    unsafe_allow_html=True,
+                )
+                rows_t = []
+                for r in filas:
+                    estado_tag = "⏳ pendiente" if r["pendiente"] else "✅"
+                    rows_t.append({
+                        "#":        r["id"],
+                        "Indicador":r["nombre"],
+                        "Valor":    r["valor"],
+                        "Unidad":   r["unidad"],
+                        "Score":    r["label"],
+                        "Decisión": r["decision"],
+                        "Fuente":   r["fuente"],
+                        "Estado":   estado_tag,
+                        "_sc":      r["score"],
+                    })
+                df_res = pd.DataFrame(rows_t)
+
+                def _color_row(row):
+                    sc = row["_sc"]
+                    return [f"background-color:{SCORE_5_COLOR[sc]}" if col=="Score" else ""
+                            for col in row.index]
+
+                st.dataframe(
+                    df_res.drop(columns=["_sc"]).style.apply(_color_row, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+                st.markdown("")
 
     # ════════════════════════════════════════════════════════════════════
     #  RESUMEN VALIDACIÓN PRE-CRÉDITO
     # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 📋 Resumen de Validación Pre-Crédito")
-    st.caption("⚠️ Resumen parcialmente hardcoded · Se actualizará con datos reales")
 
-    sg_estado = "✅" if sg == 0 else "⚠️" if sg == 1 else "🔴"
+    scoring      = st.session_state.get("scoring")
+    gdf_frontera = st.session_state.get("gdf_frontera")
+    gdf_aptitud  = st.session_state.get("gdf_aptitud")
+    gdf_vp       = st.session_state.get("gdf_valor_potencial")
+    ndvi_ok      = MOCK_NDVI["ndvi_promedio"] >= MOCK_NDVI["umbral_ndvi"]
+
+    sg_label  = scoring["label_global"] if scoring else "— (ejecuta scoring D)"
+    sg_estado = ("✅" if scoring and scoring["score_global"]<=1
+                 else "⚠️" if scoring and scoring["score_global"]==2
+                 else "🔴" if scoring and scoring["score_global"]>=3
+                 else "—")
+
     resumen = pd.DataFrame({
-        "Validación": [
-            "Área efectiva cultivable",
-            "Zona agrícola (frontera)",
-            "Aptitud al cultivo",
-            "Valor potencial del suelo",
-            "Actividad productiva (NDVI)",
-            "Infraestructura",
-            "Riesgo agroclimático (scoring)",
+        "Marco": [
+            "A · Frontera agrícola",
+            "A · Área efectiva cultivable",
+            "B · Aptitud al cultivo",
+            "B · Valor potencial del suelo",
+            "B · Actividad productiva (NDVI)",
+            "C · Infraestructura",
+            "D · Riesgo agroclimático",
         ],
         "Resultado": [
+            ", ".join(gdf_frontera["tipo_condi"].unique()) if gdf_frontera is not None and len(gdf_frontera)>0 else "—",
             f"{area_ef} ha ({pct_ef}%)",
-            ", ".join(gdf_frontera["tipo_condi"].unique()) if gdf_frontera is not None else "—",
-            ", ".join(gdf_aptitud["aptitud"].unique()) if gdf_aptitud is not None else "—",
-            ", ".join(gdf_vp["clase_ufh"].unique()) if gdf_vp is not None else "—",
+            ", ".join(gdf_aptitud["aptitud"].unique()) if gdf_aptitud is not None and len(gdf_aptitud)>0 else "—",
+            ", ".join(str(x) for x in gdf_vp["clase_ufh"].unique()) if gdf_vp is not None and len(gdf_vp)>0 else "—",
             "✅ Activa" if ndvi_ok else "⚠️ Por verificar",
             d["construcciones_desc"],
-            scoring["score_global_label"],
+            sg_label,
         ],
-        "Estado": ["✅", "✅", "✅", "✅", "✅" if ndvi_ok else "⚠️", "✅", sg_estado],
+        "Estado": ["✅","✅","✅","✅",
+                   "✅" if ndvi_ok else "⚠️",
+                   "✅", sg_estado],
     })
     st.dataframe(resumen, use_container_width=True, hide_index=True)
 
+    # ════════════════════════════════════════════════════════════════════
+    #  PDF
+    # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 📄 Reporte Ex-Ante PDF")
-    try:
-        pdf_bytes = generate_exante_report(datos=d, predio=predio, scoring=scoring)
-        st.download_button(
-            label="⬇️ Descargar Reporte PDF Ejecutivo",
-            data=pdf_bytes,
-            file_name=f"reporte_exante_{predio['codigo']}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True,
+
+    c_info, c_btn = st.columns([3,2])
+    with c_info:
+        cod_rpt = predio.get("codigo","predio")
+        st.caption(
+            f"📄 Incluye: ficha catastral · dictamen · marcos A–C · "
+            f"scoring D con 15 indicadores y umbrales usados · "
+            f"serie climática · sección de firmas.\n\n"
+            f"**Archivo:** `reporte_exante_{cod_rpt}.pdf`"
         )
-    except Exception as e:
-        st.error(f"❌ Error generando PDF: {e}")
+        if not scoring:
+            st.warning("⚠️ Ejecuta primero el scoring (sección D3) para incluirlo en el PDF.")
 
-# ════════════════════════════════════════════════════════════════════════════
-#  TAB 2 · RIESGO AGROCLIMÁTICO
-# ════════════════════════════════════════════════════════════════════════════
-with tab_riesgo:
-    d       = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-    cultivo = d["cultivo"]
+    with c_btn:
+        if st.button("🔄 Generar PDF ejecutivo", type="primary",
+                     use_container_width=True, key="gen_pdf"):
+            with st.spinner("Generando PDF..."):
+                try:
+                    pdf_bytes = generate_exante_report(
+                        datos=d, predio=predio,
+                        scoring=st.session_state.get("scoring"),
+                    )
+                    st.session_state["pdf_bytes"] = pdf_bytes
+                    st.session_state["pdf_name"]  = f"reporte_exante_{cod_rpt}.pdf"
+                    st.success("✅ PDF listo.")
+                except Exception as e:
+                    st.error(f"❌ Error generando PDF: {e}")
 
-    st.subheader(f"Análisis de Riesgo Agroclimático · {cultivo.capitalize()}")
-    st.caption("Indicadores históricos (últimos 3 años) cruzados con la matriz de vulnerabilidad del cultivo.")
+        if "pdf_bytes" in st.session_state:
+            st.download_button(
+                label="⬇️ Descargar PDF",
+                data=st.session_state["pdf_bytes"],
+                file_name=st.session_state["pdf_name"],
+                mime="application/pdf",
+                key="dl_pdf",
+                use_container_width=True,
+            )
 
-    meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-    c1, c2 = st.columns(2)
-    with c1:
-        fig_p = px.bar(x=meses, y=d["precip_mensual"], labels={"x":"Mes","y":"mm"},
-                       title="Precipitación media mensual (mm)",
-                       color_discrete_sequence=["#3b82f6"])
-        fig_p.update_layout(height=260, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_p, use_container_width=True)
-    with c2:
-        fig_t = go.Figure()
-        fig_t.add_trace(go.Scatter(x=meses, y=d["temp_max_mensual"], name="Tmax",
-                                   line=dict(color="#ef4444")))
-        fig_t.add_trace(go.Scatter(x=meses, y=d["temp_min_mensual"], name="Tmin",
-                                   line=dict(color="#3b82f6"), fill="tonexty",
-                                   fillcolor="rgba(59,130,246,0.1)"))
-        fig_t.update_layout(title="Temperatura mensual (°C)", height=260, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_t, use_container_width=True)
-
-    st.markdown("---")
-    st.markdown(f"### 🧮 Matriz de Vulnerabilidad · {cultivo.capitalize()}")
-    MATRIZ = {
-        "café": {
-            "Déficit hídrico (sequía)": ("Bajo",  "Precipitación anual >1.200 mm · sin meses secos extremos"),
-            "Exceso de lluvia":         ("Medio", "Meses con >300 mm pueden afectar floración"),
-            "Heladas":                  ("Bajo",  "T_min > 10°C en todo el año"),
-            "Temperatura máxima":       ("Bajo",  "T_max < 30°C · óptimo cafetero"),
-            "Viento fuerte":            ("Bajo",  "Sin registro de episodios severos"),
-        },
-        "plátano": {
-            "Déficit hídrico (sequía)": ("Bajo",  "Precipitación abundante en Urabá"),
-            "Exceso de lluvia":         ("Alto",  "Precipitación > 350 mm/mes · riesgo sigatoka"),
-            "Heladas":                  ("Nulo",  "T_min > 18°C permanente"),
-            "Temperatura máxima":       ("Medio", "T_max > 32°C en verano · estrés hídrico"),
-            "Viento fuerte":            ("Medio", "Zona costera · riesgo volcamiento"),
-        },
-    }
-    matriz_data = [{"Indicador":i,"Nivel de riesgo":f"{COLOR_RIESGO[r]} {r}","Detalle":det}
-                   for i,(r,det) in MATRIZ[cultivo].items()]
-    st.dataframe(pd.DataFrame(matriz_data), use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    rg = d["riesgo_global"]
-    semaforo(f"**Riesgo agroclimático global: {rg}** · {cultivo.capitalize()} · {ubicacion_label}",
-             {"Bajo":"verde","Medio":"naranja","Alto":"rojo"}.get(rg,"naranja"))
-
-# ════════════════════════════════════════════════════════════════════════════
-#  TAB 3 · MONITOREO & FORECAST
-# ════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+#  TAB 2 · MONITOREO & FORECAST
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_monitoreo:
     d = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-
     st.subheader("Monitoreo en Tiempo Real y Forecast")
     st.caption("Módulo activo durante el ciclo de vida del crédito.")
 
@@ -971,7 +1224,7 @@ with tab_monitoreo:
     else:
         st.success("✅ Sin alertas climáticas activas en este momento.")
 
-    c1, c2, c3 = st.columns(3)
+    c1,c2,c3 = st.columns(3)
     with c1:
         kpi("NDVI actual", round(d["ndvi_actual"],2))
         st.caption(f"Tendencia: {d['ndvi_tendencia']}")
@@ -980,29 +1233,33 @@ with tab_monitoreo:
 
     st.markdown("---")
     dias = [(date.today()+timedelta(days=i)).strftime("%d %b") for i in range(7)]
-    c1, c2 = st.columns(2)
+    c1,c2 = st.columns(2)
     with c1:
         fig_fp = px.bar(x=dias, y=d["forecast_precip_7d"],
                         title="Precipitación · Forecast 7 días (mm)",
-                        labels={"x":"","y":"mm"}, color_discrete_sequence=["#3b82f6"])
+                        labels={"x":"","y":"mm"},
+                        color_discrete_sequence=["#3b82f6"])
         fig_fp.update_layout(height=260, margin=dict(t=40,b=20))
         st.plotly_chart(fig_fp, use_container_width=True)
     with c2:
         fig_ft = px.line(x=dias, y=d["forecast_temp_7d"],
                          title="Temperatura · Forecast 7 días (°C)",
-                         labels={"x":"","y":"°C"}, color_discrete_sequence=["#ef4444"])
+                         labels={"x":"","y":"°C"},
+                         color_discrete_sequence=["#ef4444"])
         fig_ft.update_layout(height=260, margin=dict(t=40,b=20))
         st.plotly_chart(fig_ft, use_container_width=True)
 
     st.markdown("---")
     st.markdown("### 📈 Evolución NDVI (últimos 12 meses)")
-    meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-    fig_nm = px.line(x=meses, y=d["ndvi_mensual_hist"],
-                     labels={"x":"Mes","y":"NDVI"}, color_discrete_sequence=["#16a34a"])
-    fig_nm.add_scatter(x=[meses[-1]], y=[d["ndvi_actual"]], mode="markers",
-                       marker=dict(size=10, color="#dc2626"), name="NDVI actual")
+    MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+    fig_nm = px.line(x=MESES, y=d["ndvi_mensual_hist"],
+                     labels={"x":"Mes","y":"NDVI"},
+                     color_discrete_sequence=["#16a34a"])
+    fig_nm.add_scatter(x=[MESES[-1]], y=[d["ndvi_actual"]],
+                       mode="markers", marker=dict(size=10,color="#dc2626"),
+                       name="NDVI actual")
     fig_nm.update_layout(height=260, margin=dict(t=20,b=20))
     st.plotly_chart(fig_nm, use_container_width=True)
 
-    st.info("**Próximas funcionalidades:** Alertas automáticas · Umbrales fenológicos · "
-            "Recomendaciones de gestión del riesgo.", icon="🔜")
+    st.info("**Próximas funcionalidades:** Alertas automáticas · "
+            "Umbrales por fase fenológica · Reporte de monitoreo PDF.", icon="🔜")
