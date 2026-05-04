@@ -207,13 +207,17 @@ def _build_pdf(datos: dict, predio: dict | None, scoring: dict | None = None) ->
         return t
 
     # ── Helper: caja dictamen ─────────────────────────────────────────────
+    S_DICT_TITLE = ParagraphStyle("dict_title", fontName="Helvetica-Bold",
+                                   fontSize=14, alignment=TA_CENTER)
+    S_DICT_DESC  = ParagraphStyle("dict_desc",  fontName="Helvetica",
+                                   fontSize=9,  alignment=TA_CENTER)
+
     def dictamen_box(label, desc, bg, fg):
+        S_DICT_TITLE.textColor = _hex(fg)
+        S_DICT_DESC.textColor  = _hex(fg)
         inner = Table(
-            [[P(f"DICTAMEN: {label}", sty("_d",
-               fontName="Helvetica-Bold", fontSize=14,
-               textColor=_hex(fg), alignment=TA_CENTER))],
-             [P(desc, sty("_dd",
-               fontSize=9, textColor=_hex(fg), alignment=TA_CENTER))]],
+            [[P(f"DICTAMEN: {label}", S_DICT_TITLE)],
+             [P(desc,                 S_DICT_DESC)]],
             colWidths=[W - 3.6*cm],
         )
         inner.setStyle(TableStyle([
@@ -227,17 +231,20 @@ def _build_pdf(datos: dict, predio: dict | None, scoring: dict | None = None) ->
         return inner
 
     # ── Helper: KPI row ───────────────────────────────────────────────────
+    S_KPI_VAL = ParagraphStyle("kpi_val", fontName="Helvetica-Bold",
+                                fontSize=13, alignment=TA_CENTER,
+                                textColor=_hex(C.DARK))
+    S_KPI_LBL = ParagraphStyle("kpi_lbl", fontSize=7.5, alignment=TA_CENTER,
+                                textColor=_hex(C.SUBTEXT))
+
     def kpi_row(items):
-        """items: list of (label, value) → fila de métricas en caja."""
         n = len(items)
         w = (W - 3.6*cm) / n
         cells = []
         for label, val in items:
             cells.append(Table(
-                [[P(str(val),  sty("_v", fontName="Helvetica-Bold", fontSize=13,
-                               alignment=TA_CENTER, textColor=_hex(C.DARK)))],
-                 [P(str(label),sty("_l", fontSize=7.5, alignment=TA_CENTER,
-                               textColor=_hex(C.SUBTEXT)))]],
+                [[P(str(val),   S_KPI_VAL)],
+                 [P(str(label), S_KPI_LBL)]],
                 colWidths=[w - 0.4*cm],
             ))
         t = Table([cells], colWidths=[w]*n)
@@ -414,15 +421,17 @@ def _build_pdf(datos: dict, predio: dict | None, scoring: dict | None = None) ->
         story += [P("D · Scoring de Riesgo Agroclimático — Resultados", "h2")]
 
         # Resumen por grupo
+        S_GRP_NOM = ParagraphStyle("grp_nom", fontSize=7.5, alignment=TA_CENTER)
+        S_GRP_SC  = ParagraphStyle("grp_sc",  fontName="Helvetica-Bold",
+                                    fontSize=9, alignment=TA_CENTER)
         grp_cells = []
         for grupo in GRUPOS:
             sc = scoring["por_grupo"].get(grupo, 0)
+            S_GRP_NOM.textColor = _hex(SCORE_TEXT[sc])
+            S_GRP_SC.textColor  = _hex(SCORE_TEXT[sc])
             grp_cells.append(Table(
-                [[P(grupo,     sty("_gn", fontSize=7.5, alignment=TA_CENTER,
-                               textColor=_hex(SCORE_TEXT[sc])))],
-                 [P(SCORE_LABEL[sc], sty("_gs", fontName="Helvetica-Bold",
-                               fontSize=9, alignment=TA_CENTER,
-                               textColor=_hex(SCORE_TEXT[sc])))]],
+                [[P(grupo,            S_GRP_NOM)],
+                 [P(SCORE_LABEL[sc],  S_GRP_SC)]],
                 colWidths=[(W-3.6*cm)/len(GRUPOS)],
             ))
         grp_t = Table([grp_cells], colWidths=[(W-3.6*cm)/len(GRUPOS)]*len(GRUPOS))
