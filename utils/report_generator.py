@@ -89,6 +89,18 @@ DECISIONES_RIESGO = {
 #  PDF EJECUTIVO
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _make_style(name, **kwargs):
+    """Crea un ParagraphStyle evitando error si ya está registrado."""
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.rl_config import canvas_basefontname  # noqa
+    try:
+        return ParagraphStyle(name, **kwargs)
+    except KeyError:
+        # Ya registrado — devolver uno anónimo con los mismos atributos
+        s = ParagraphStyle(f"{name}_{id(kwargs)}", **kwargs)
+        return s
+
+
 def _build_pdf(datos: dict, predio: dict | None, scoring: dict | None = None) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm, mm
