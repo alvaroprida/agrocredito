@@ -28,6 +28,8 @@ from utils.postgis_client import (
 )
 from utils.eosda_terrain import get_terrain_analysis
 from utils.eosda_ndvi    import get_ndvi_analysis
+from utils.risk_scoring  import score_riesgo, GRUPOS, SCORE_LABEL, SCORE_COLOR, SCORE_TEXT
+from utils.report_generator import generate_exante_report
 
 # ── Configuración de página ──────────────────────────────────────────────────
 st.set_page_config(
@@ -246,9 +248,9 @@ st.divider()
 # ════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ════════════════════════════════════════════════════════════════════════════
-tab_inicio, tab_elegibilidad, tab_riesgo, tab_monitoreo = st.tabs([
+tab_inicio, tab_validacion, tab_riesgo, tab_monitoreo = st.tabs([
     "🏠 Inicio · Ingreso del Predio",
-    "✅ Eligibilidad",
+    "✅ Validación Pre-Crédito",
     "🌧️ Riesgo Agroclimático",
     "📡 Monitoreo & Forecast",
 ])
@@ -317,7 +319,7 @@ with tab_inicio:
 # ════════════════════════════════════════════════════════════════════════════
 #  TAB 1 · ELIGIBILIDAD
 # ════════════════════════════════════════════════════════════════════════════
-with tab_elegibilidad:
+with tab_validacion:
     predio  = st.session_state.get("predio")
     d       = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
     cultivo = st.session_state.get("cultivo", d.get("cultivo", "café"))
@@ -808,12 +810,60 @@ with tab_elegibilidad:
                      "verde" if dist < 20 else "naranja")
 
     # ════════════════════════════════════════════════════════════════════
-    #  RESUMEN ELIGIBILIDAD
+    #  E · SCORING DE RIESGO AGROCLIMÁTICO
     # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 📋 Resumen de Eligibilidad")
+    st.markdown("### 🌧️ E · Scoring de Riesgo Agroclimático")
+    st.caption("15 indicadores en 6 grupos · umbrales estándar por cultivo · MVP hardcoded")
+
+    scoring = score_riesgo(d)
+    st.session_state["scoring"] = scoring
+    sg = scoring["score_global"]
+
+    st.markdown(
+        f'<div style="background:{SCORE_COLOR[sg]};border-left:6px solid {SCORE_TEXT[sg]};'
+        f'padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
+        f'<b style="font-size:1.05rem;color:{SCORE_TEXT[sg]}">Riesgo global: {SCORE_LABEL[sg]}</b>'
+        f'&nbsp;&nbsp;<span style="font-size:0.85rem;color:{SCORE_TEXT[sg]}">'
+        f'🔴 {scoring["n_alto"]} alto · 🟡 {scoring["n_medio"]} medio · 🟢 {scoring["n_bajo"]} bajo'
+        f'</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols_e = st.columns(len(GRUPOS))
+    for col_e, grupo in zip(cols_e, GRUPOS):
+        sc_g = scoring["por_grupo"][grupo]
+        col_e.markdown(
+            f'<div style="background:{SCORE_COLOR[sc_g]};border:1px solid {SCORE_TEXT[sc_g]};'
+            f'border-radius:6px;padding:0.5rem 0.3rem;text-align:center;margin:2px">'
+            f'<div style="font-size:0.68rem;color:{SCORE_TEXT[sc_g]};font-weight:600;line-height:1.3">{grupo}</div>'
+            f'<div style="font-size:0.92rem;font-weight:700;color:{SCORE_TEXT[sc_g]}">{SCORE_LABEL[sc_g]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+
+    with st.expander("📊 Detalle de los 15 indicadores", expanded=False):
+        df_sc = pd.DataFrame([{
+            "#": r["id"],
+            "Grupo": r["grupo"],
+            "Indicador": r["nombre"],
+            "Valor": r["valor"],
+            "Unidad": r["unidad"],
+            "Score": r["score_label"],
+            "Decisión": r["decision"],
+        } for r in scoring["resultados"]])
+        st.dataframe(df_sc, use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    #  RESUMEN VALIDACIÓN PRE-CRÉDITO
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 📋 Resumen de Validación Pre-Crédito")
     st.caption("⚠️ Resumen parcialmente hardcoded · Se actualizará con datos reales")
 
+    sg_estado = "✅" if sg == 0 else "⚠️" if sg == 1 else "🔴"
     resumen = pd.DataFrame({
         "Validación": [
             "Área efectiva cultivable",
@@ -822,6 +872,7 @@ with tab_elegibilidad:
             "Valor potencial del suelo",
             "Actividad productiva (NDVI)",
             "Infraestructura",
+            "Riesgo agroclimático (scoring)",
         ],
         "Resultado": [
             f"{area_ef} ha ({pct_ef}%)",
@@ -830,10 +881,26 @@ with tab_elegibilidad:
             ", ".join(gdf_vp["clase_ufh"].unique()) if gdf_vp is not None else "—",
             "✅ Activa" if ndvi_ok else "⚠️ Por verificar",
             d["construcciones_desc"],
+            scoring["score_global_label"],
         ],
-        "Estado": ["✅","✅","✅","✅","✅" if ndvi_ok else "⚠️","✅"],
+        "Estado": ["✅", "✅", "✅", "✅", "✅" if ndvi_ok else "⚠️", "✅", sg_estado],
     })
     st.dataframe(resumen, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### 📄 Reporte Ex-Ante PDF")
+    try:
+        pdf_bytes = generate_exante_report(datos=d, predio=predio, scoring=scoring)
+        st.download_button(
+            label="⬇️ Descargar Reporte PDF Ejecutivo",
+            data=pdf_bytes,
+            file_name=f"reporte_exante_{predio['codigo']}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+    except Exception as e:
+        st.error(f"❌ Error generando PDF: {e}")
 
 # ════════════════════════════════════════════════════════════════════════════
 #  TAB 2 · RIESGO AGROCLIMÁTICO
