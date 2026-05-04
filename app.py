@@ -1114,13 +1114,16 @@ with tab_validacion:
                     })
                 df_res = pd.DataFrame(rows_t)
 
+                df_display = df_res.drop(columns=["_sc"])
+                score_map  = {i: r["score"] for i, r in enumerate(filas)}
+
                 def _color_row(row):
-                    sc = row["_sc"]
+                    sc = score_map.get(row.name, 0)
                     return [f"background-color:{SCORE_5_COLOR[sc]}" if col=="Score" else ""
                             for col in row.index]
 
                 st.dataframe(
-                    df_res.drop(columns=["_sc"]).style.apply(_color_row, axis=1),
+                    df_display.style.apply(_color_row, axis=1),
                     use_container_width=True, hide_index=True,
                 )
                 st.markdown("")
