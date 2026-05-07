@@ -10,6 +10,29 @@ Tab 2 · Monitoreo             → NDVI actual + forecast
 
 import streamlit as st
 import pandas as pd
+
+CULTIVOS_DISPONIBLES = [
+    "Aguacate (Hass)",
+    "Cacao",
+    "Café",
+    "Cebolla",
+    "Durazno",
+    "Fresa",
+    "Granadilla",
+    "Guayaba",
+    "Gulupa",
+    "Limón",
+    "Lulo",
+    "Maíz",
+    "Mango",
+    "Maracuyá",
+    "Mora",
+    "Naranja",
+    "Papa",
+    "Piña",
+    "Plátano",
+    "Uchuva",
+]
 import numpy as np
 import folium
 from folium.plugins import Fullscreen
@@ -407,10 +430,13 @@ with tab_inicio:
     c1, c2, c3 = st.columns(3)
     with c1: lat_input  = st.number_input("Latitud",  value=5.07013,  format="%.6f")
     with c2: lon_input  = st.number_input("Longitud", value=-73.55157, format="%.6f")
-    with c3: cultivo_in = st.selectbox("Tipo de cultivo", ["café","plátano"])
+    with c3: cultivo_in = st.selectbox("Tipo de cultivo", CULTIVOS_DISPONIBLES,
+                                         index=CULTIVOS_DISPONIBLES.index("Café"))
 
     if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
-        caso_m = "Café · Eje Cafetero" if cultivo_in=="café" else "Plátano · Urabá"
+        _cultivo_lower = cultivo_in.lower()
+        caso_m = ("Plátano · Urabá" if _cultivo_lower == "plátano"
+                  else "Café · Eje Cafetero")
         st.session_state.update({
             "lat": lat_input, "lon": lon_input, "cultivo": cultivo_in,
             "analizado": True,
@@ -965,10 +991,12 @@ with tab_validacion:
 
         col_cult, col_reset = st.columns([2,1])
         with col_cult:
+            _umb_opts = list(UMBRALES_5.keys())   # sólo cultivos con umbrales definidos
+            _umb_default = cultivo.lower() if cultivo.lower() in _umb_opts else _umb_opts[0]
             cultivo_umb = st.selectbox(
                 "Cultivo para umbrales predefinidos",
-                ["café","plátano"],
-                index=0 if cultivo=="café" else 1,
+                _umb_opts,
+                index=_umb_opts.index(_umb_default),
                 key="cultivo_umbrales",
             )
         with col_reset:
