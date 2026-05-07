@@ -980,7 +980,16 @@ with tab_validacion:
         )
         _color_global = max([_color_cu, _color_via], key=lambda c: _COLOR_RANK[c])
         _label_global = {"verde": "Acceso adecuado", "naranja": "Acceso medio", "rojo": "Acceso bajo"}[_color_global]
-        semaforo(f"**{_label_global}** · Ambos indicadores deben cumplirse para calificar verde.", _color_global)
+        if _color_global == "verde":
+            _detalle_global = "Ambos indicadores en rango adecuado."
+        else:
+            _limitantes = []
+            if _COLOR_RANK[_color_cu] == _COLOR_RANK[_color_global] and infra_centro:
+                _limitantes.append(f"centro urbano ({infra_centro['distancia_km']} km por carretera)")
+            if _COLOR_RANK[_color_via] == _COLOR_RANK[_color_global] and infra_via:
+                _limitantes.append(f"vía transitable ({infra_via['distancia_m']:.0f} m en línea recta)")
+            _detalle_global = "Limitante: " + " · ".join(_limitantes) + "."
+        semaforo(f"**{_label_global}** · {_detalle_global}", _color_global)
 
         st.markdown("---")
         c1, c2 = st.columns(2)
