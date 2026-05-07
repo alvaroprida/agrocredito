@@ -37,15 +37,20 @@ def _overpass_get(query: str) -> list:
         "Accept":     "application/json",
     }
     for intento in range(REINTENTOS_OVERPASS):
-        resp = requests.get(OVERPASS_URL, params={"data": query},
-                            headers=headers, timeout=30)
-        if resp.status_code == 429:
+        try:
+            resp = requests.get(OVERPASS_URL, params={"data": query},
+                                headers=headers, timeout=90)
+        except requests.exceptions.Timeout:
+            espera = PAUSA_OVERPASS_SEG * (2 ** intento)
+            time.sleep(espera)
+            continue
+        if resp.status_code in (429, 504):
             espera = PAUSA_OVERPASS_SEG * (2 ** intento)
             time.sleep(espera)
             continue
         resp.raise_for_status()
         return resp.json().get("elements", [])
-    raise RuntimeError("Overpass: límite de reintentos alcanzado (429).")
+    raise RuntimeError("Overpass: límite de reintentos alcanzado (429/504).")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -55,7 +60,7 @@ def _overpass_get(query: str) -> list:
 def _get_centros_urbanos(lat: float, lon: float) -> list[dict]:
     radio_m = RADIO_BUSQUEDA_KM * 1000
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:60];
     (
       node["place"~"^(city|town|village)$"]
          (around:{radio_m},{lat},{lon});
@@ -162,7 +167,7 @@ def get_distancia_via(lat: float, lon: float) -> dict | None:
     """
     radio_m = RADIO_CARRETERA_KM * 1000
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:60];
     way["highway"~"^({HIGHWAY_TYPES})$"]
       (around:{radio_m},{lat},{lon});
     out geom;
