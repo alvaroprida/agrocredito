@@ -920,40 +920,7 @@ with tab_validacion:
         elif apt_result is not None and apt_result.get("error") is None:
             st.warning("No se encontró información de aptitud para este predio.")
 
-    with st.expander("💎 B2 · Valor Potencial del Suelo", expanded=True):
-        with st.spinner("Cargando valor potencial..."):
-            gdf_vp = get_valor_potencial(predio["gdf"])
-        st.session_state["gdf_valor_potencial"] = gdf_vp
-
-        c1,c2 = st.columns(2)
-        with c1: ver_predio_b2 = st.checkbox("🟢 Predio",          value=True, key="b2_predio")
-        with c2: ver_vp_b2     = st.checkbox("🟦 Valor potencial",  value=True, key="b2_vp")
-
-        def estilo_vp(feature):
-            color = color_ufh(feature["properties"].get("clase_ufh",""))
-            return {"fillColor":color,"color":color,"weight":1.5,"fillOpacity":0.45}
-
-        st_folium(mapa_capa(
-            predio["gdf"], gdf_vp,
-            mostrar_predio=ver_predio_b2, mostrar_capa=ver_vp_b2,
-            estilo_capa_fn=estilo_vp,
-            campos_tooltip=["clase_ufh","area_ha","pct_predio"],
-            aliases_tooltip=["Clase UFH","Área (ha)","% predio"],
-            nombre_capa="Valor potencial",
-        ), width=700, height=380, returned_objects=[], key="map_b2")
-
-        if gdf_vp is not None and len(gdf_vp) > 0:
-            df_vp = gdf_vp.groupby("clase_ufh").agg(
-                area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
-            ).reset_index().sort_values("clase_ufh").rename(
-                columns={"clase_ufh":"Clase UFH","area_ha":"Área (ha)",
-                         "pct_predio":"% del predio"})
-            st.dataframe(df_vp, use_container_width=True, hide_index=True)
-            st.caption("Clase 01–04: alto potencial 🟢 · 05–08: medio 🟡 · 09+: bajo 🔴")
-        else:
-            st.warning("No se encontró información de valor potencial.")
-
-    with st.expander("📊 B3 · Actividad Productiva (NDVI)", expanded=True):
+    with st.expander("📊 B2 · Actividad Productiva (NDVI)", expanded=True):
         st.caption("⚠️ Datos hardcoded · Se conectará a EOSDA API en la próxima versión")
         ndvi = MOCK_NDVI
         c1,c2,c3 = st.columns(3)
