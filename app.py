@@ -959,9 +959,12 @@ with tab_validacion:
             "que uno alejado con buena vía."
         )
 
+        _centroid = predio["gdf"].geometry.iloc[0].centroid
+        c_lat, c_lon = _centroid.y, _centroid.x
+
         with st.spinner("Calculando distancias de infraestructura vía OSM / OSRM …"):
-            infra_centro = _get_distancia_centro_cached(lat, lon)
-            infra_via    = _get_distancia_via_cached(lat, lon)
+            infra_centro = _get_distancia_centro_cached(c_lat, c_lon)
+            infra_via    = _get_distancia_via_cached(c_lat, c_lon)
 
         # ── Semáforo global (peor caso) ───────────────────────────────
         _COLOR_RANK = {"verde": 0, "naranja": 1, "rojo": 2}
@@ -1054,11 +1057,11 @@ with tab_validacion:
         m_infra = _base_map(predio["gdf"])
         _add_predio(m_infra, predio["gdf"])
 
-        # Marcador del predio (centroide)
+        # Marcador del centroide real del predio
         folium.CircleMarker(
-            location=[lat, lon], radius=8,
+            location=[c_lat, c_lon], radius=8,
             color="#16a34a", fill=True, fill_color="#16a34a", fill_opacity=0.9,
-            tooltip="Predio (centroide)",
+            tooltip="Centroide del predio",
         ).add_to(m_infra)
 
         if infra_centro is not None:
@@ -1083,7 +1086,7 @@ with tab_validacion:
             n_lon = infra_via.get("nearest_lon")
             if n_lat is not None and n_lon is not None:
                 folium.PolyLine(
-                    locations=[[lat, lon], [n_lat, n_lon]],
+                    locations=[[c_lat, c_lon], [n_lat, n_lon]],
                     color="#dc2626", weight=2.5, opacity=1.0, dash_array="6 6",
                     tooltip=f"Distancia a vía: {infra_via['distancia_m']:.0f} m (línea recta)",
                 ).add_to(m_infra)
