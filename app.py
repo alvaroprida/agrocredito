@@ -49,6 +49,7 @@ from utils.postgis_client import (
     get_construcciones,
 )
 from utils.aptitud_api import get_aptitud_api, CULTIVO_API_MAP, score_to_category
+from utils.infraestructura import get_distancia_centro_urbano, get_distancia_via
 from utils.eosda_terrain  import get_terrain_analysis
 from utils.eosda_ndvi     import get_ndvi_analysis
 from utils.risk_scoring   import (
@@ -60,6 +61,14 @@ from utils.report_generator import generate_exante_report
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_aptitud_cached(_gdf_predio, cultivo: str):
     return get_aptitud_api(_gdf_predio, cultivo)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_distancia_centro_cached(lat: float, lon: float):
+    return get_distancia_centro_urbano(lat, lon)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_distancia_via_cached(lat: float, lon: float):
+    return get_distancia_via(lat, lon)
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
@@ -942,16 +951,50 @@ with tab_validacion:
     #  C · INFRAESTRUCTURA
     # ════════════════════════════════════════════════════════════════════
     with st.expander("🏗️ C · Validación de Infraestructura Productiva", expanded=False):
-        st.caption("⚠️ Datos hardcoded · Se conectará a PostGIS en la próxima versión")
-        c1,c2 = st.columns(2)
-        dist = d["distancia_urbana_km"]
+
+        with st.spinner("Calculando distancias de infraestructura vía OSM / OSRM …"):
+            infra_centro = _get_distancia_centro_cached(lat, lon)
+            infra_via    = _get_distancia_via_cached(lat, lon)
+
+        c1, c2 = st.columns(2)
+
+        # ── C1 · Distancia al centro urbano más cercano ───────────────
         with c1:
-            kpi("Construcciones identificadas", d["construcciones_n"], "unidades")
-            st.caption(f"**Detalle:** {d['construcciones_desc']}")
+            st.markdown("#### 🏙️ Centro urbano más cercano")
+            if infra_centro is None:
+                st.warning("No se encontró ruta a ningún centro urbano en un radio de 80 km.")
+            else:
+                dist_cu = infra_centro["distancia_km"]
+                kpi("Distancia por carretera", dist_cu, "km")
+                kpi("Duración estimada", infra_centro["duracion_min"], "min")
+                st.caption(
+                    f"**{infra_centro['nombre']}** ({infra_centro['tipo']}) · "
+                    f"{infra_centro['dist_recta_km']} km en línea recta"
+                )
+                semaforo(
+                    f"Acceso {'adecuado' if dist_cu < 20 else 'limitado'} "
+                    f"({dist_cu} km por carretera).",
+                    "verde" if dist_cu < 20 else "naranja",
+                )
+
+        # ── C2 · Distancia a la vía transitable más cercana ──────────
         with c2:
-            kpi("Distancia a zona urbana", dist, "km")
-            semaforo(f"Acceso {'adecuado' if dist<20 else 'limitado'} ({dist} km).",
-                     "verde" if dist<20 else "naranja")
+            st.markdown("#### 🛣️ Vía transitable más cercana")
+            if infra_via is None:
+                st.warning("No se encontró ninguna vía transitable en un radio de 5 km.")
+            else:
+                dist_via_m  = infra_via["distancia_m"]
+                dist_via_km = infra_via["distancia_km"]
+                kpi("Distancia (línea recta)", dist_via_m, "m")
+                st.caption(
+                    f"**{infra_via['nombre']}** · tipo: `{infra_via['tipo']}` · "
+                    f"{dist_via_km} km"
+                )
+                semaforo(
+                    f"Acceso {'directo' if dist_via_m < 500 else 'próximo' if dist_via_m < 2000 else 'alejado'} "
+                    f"a vía ({dist_via_m:.0f} m).",
+                    "verde" if dist_via_m < 500 else "naranja" if dist_via_m < 2000 else "rojo",
+                )
 
     # ════════════════════════════════════════════════════════════════════
     #  D · ANÁLISIS DE RIESGO AGROCLIMÁTICO
