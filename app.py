@@ -1036,27 +1036,34 @@ with tab_validacion:
                 color="#3b82f6", weight=3, opacity=0.85,
                 tooltip=f"Ruta carretera: {infra_centro['distancia_km']} km · {infra_centro['duracion_min']} min",
             ).add_to(m_infra)
-            # Marcador del centro urbano
-            folium.Marker(
-                location=[infra_centro["lat"], infra_centro["lon"]],
-                tooltip=f"🏙️ {infra_centro['nombre']} ({infra_centro['tipo']})",
-                icon=folium.Icon(color="blue", icon="home", prefix="fa"),
-            ).add_to(m_infra)
+            # Marcador del centro urbano (requiere lat/lon en el dict)
+            cu_lat = infra_centro.get("lat")
+            cu_lon = infra_centro.get("lon")
+            if cu_lat is None and infra_centro["coords"]:
+                cu_lat, cu_lon = infra_centro["coords"][-1]
+            if cu_lat is not None:
+                folium.Marker(
+                    location=[cu_lat, cu_lon],
+                    tooltip=f"🏙️ {infra_centro['nombre']} ({infra_centro['tipo']})",
+                    icon=folium.Icon(color="blue", icon="home", prefix="fa"),
+                ).add_to(m_infra)
 
         if infra_via is not None:
-            # Línea recta al punto más cercano en vía
-            folium.PolyLine(
-                locations=[[lat, lon],
-                            [infra_via["nearest_lat"], infra_via["nearest_lon"]]],
-                color="#f59e0b", weight=2, opacity=0.9, dash_array="8",
-                tooltip=f"Vía más cercana: {infra_via['distancia_m']:.0f} m",
-            ).add_to(m_infra)
-            folium.CircleMarker(
-                location=[infra_via["nearest_lat"], infra_via["nearest_lon"]],
-                radius=6, color="#f59e0b", fill=True,
-                fill_color="#f59e0b", fill_opacity=0.9,
-                tooltip=f"Punto en vía ({infra_via['nombre']} · {infra_via['tipo']})",
-            ).add_to(m_infra)
+            n_lat = infra_via.get("nearest_lat")
+            n_lon = infra_via.get("nearest_lon")
+            if n_lat is not None:
+                # Línea recta al punto más cercano en vía
+                folium.PolyLine(
+                    locations=[[lat, lon], [n_lat, n_lon]],
+                    color="#f59e0b", weight=2, opacity=0.9, dash_array="8",
+                    tooltip=f"Vía más cercana: {infra_via['distancia_m']:.0f} m",
+                ).add_to(m_infra)
+                folium.CircleMarker(
+                    location=[n_lat, n_lon],
+                    radius=6, color="#f59e0b", fill=True,
+                    fill_color="#f59e0b", fill_opacity=0.9,
+                    tooltip=f"Punto en vía ({infra_via['nombre']} · {infra_via['tipo']})",
+                ).add_to(m_infra)
 
         _fit(m_infra, predio["gdf"])
         st_folium(m_infra, width=None, height=420,
