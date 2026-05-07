@@ -996,6 +996,72 @@ with tab_validacion:
                     "verde" if dist_via_m < 500 else "naranja" if dist_via_m < 2000 else "rojo",
                 )
 
+        # ── Leyenda de umbrales ───────────────────────────────────────
+        st.markdown("""
+<table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:0.5rem">
+<tr style="background:#d1fae5;text-align:center">
+  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🟢 <b>Acceso adecuado</b></td>
+  <td style="padding:6px 10px">Centro urbano &lt; 10 km</td>
+  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable &lt; 500 m</td>
+</tr>
+<tr style="background:#fef3c7;text-align:center">
+  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🟡 <b>Acceso medio</b></td>
+  <td style="padding:6px 10px">Centro urbano 10–25 km</td>
+  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable 500 m – 2 km</td>
+</tr>
+<tr style="background:#fee2e2;text-align:center">
+  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🔴 <b>Acceso bajo</b></td>
+  <td style="padding:6px 10px">Centro urbano &gt; 25 km</td>
+  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable &gt; 2 km</td>
+</tr>
+</table>
+""", unsafe_allow_html=True)
+
+        # ── Mapa de infraestructura ───────────────────────────────────
+        st.markdown("---")
+        m_infra = _base_map(predio["gdf"])
+        _add_predio(m_infra, predio["gdf"])
+
+        # Marcador del predio (centroide)
+        folium.CircleMarker(
+            location=[lat, lon], radius=8,
+            color="#16a34a", fill=True, fill_color="#16a34a", fill_opacity=0.9,
+            tooltip="Predio (centroide)",
+        ).add_to(m_infra)
+
+        if infra_centro is not None:
+            # Ruta por carretera al centro urbano
+            folium.PolyLine(
+                locations=infra_centro["coords"],
+                color="#3b82f6", weight=3, opacity=0.85,
+                tooltip=f"Ruta carretera: {infra_centro['distancia_km']} km · {infra_centro['duracion_min']} min",
+            ).add_to(m_infra)
+            # Marcador del centro urbano
+            folium.Marker(
+                location=[infra_centro["lat"], infra_centro["lon"]],
+                tooltip=f"🏙️ {infra_centro['nombre']} ({infra_centro['tipo']})",
+                icon=folium.Icon(color="blue", icon="home", prefix="fa"),
+            ).add_to(m_infra)
+
+        if infra_via is not None:
+            # Línea recta al punto más cercano en vía
+            folium.PolyLine(
+                locations=[[lat, lon],
+                            [infra_via["nearest_lat"], infra_via["nearest_lon"]]],
+                color="#f59e0b", weight=2, opacity=0.9, dash_array="8",
+                tooltip=f"Vía más cercana: {infra_via['distancia_m']:.0f} m",
+            ).add_to(m_infra)
+            folium.CircleMarker(
+                location=[infra_via["nearest_lat"], infra_via["nearest_lon"]],
+                radius=6, color="#f59e0b", fill=True,
+                fill_color="#f59e0b", fill_opacity=0.9,
+                tooltip=f"Punto en vía ({infra_via['nombre']} · {infra_via['tipo']})",
+            ).add_to(m_infra)
+
+        _fit(m_infra, predio["gdf"])
+        st_folium(m_infra, width=None, height=420,
+                  returned_objects=[], key="map_infra")
+
     # ════════════════════════════════════════════════════════════════════
     #  D · ANÁLISIS DE RIESGO AGROCLIMÁTICO
     # ════════════════════════════════════════════════════════════════════

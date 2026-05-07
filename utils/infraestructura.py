@@ -139,6 +139,8 @@ def get_distancia_centro_urbano(lat: float, lon: float) -> dict | None:
         "duracion_min":  r["duracion_min"],
         "dist_recta_km": mejor["dist_recta_km"],
         "coords":        r["coords"],
+        "lat":           mejor["lat"],
+        "lon":           mejor["lon"],
     }
 
 
@@ -192,11 +194,19 @@ def get_distancia_via(lat: float, lon: float) -> dict | None:
         dist = predio_m.distance(linea_m)
         if dist < mejor_dist:
             mejor_dist = dist
+            nearest_m  = linea_m.interpolate(linea_m.project(predio_m))
+            nearest_wgs = (
+                gpd.GeoDataFrame(geometry=[nearest_m], crs="EPSG:3857")
+                .to_crs("EPSG:4326")
+                .geometry.iloc[0]
+            )
             mejor_via  = {
-                "nombre":     elem.get("tags", {}).get("name", "Sin nombre"),
-                "tipo":       elem.get("tags", {}).get("highway", ""),
+                "nombre":      elem.get("tags", {}).get("name", "Sin nombre"),
+                "tipo":        elem.get("tags", {}).get("highway", ""),
                 "distancia_m":  round(dist, 1),
                 "distancia_km": round(dist / 1000, 3),
+                "nearest_lat":  nearest_wgs.y,
+                "nearest_lon":  nearest_wgs.x,
             }
 
     return mejor_via
