@@ -58,8 +58,8 @@ from utils.risk_scoring   import (
 from utils.report_generator import generate_exante_report
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_aptitud_cached(gdf_predio, cultivo: str):
-    return get_aptitud_api(gdf_predio, cultivo)
+def _get_aptitud_cached(_gdf_predio, cultivo: str):
+    return get_aptitud_api(_gdf_predio, cultivo)
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
