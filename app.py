@@ -972,9 +972,9 @@ with tab_validacion:
                     f"{infra_centro['dist_recta_km']} km en línea recta"
                 )
                 semaforo(
-                    f"Acceso {'adecuado' if dist_cu < 20 else 'limitado'} "
+                    f"Acceso {'adecuado' if dist_cu < 10 else 'medio' if dist_cu < 25 else 'bajo'} "
                     f"({dist_cu} km por carretera).",
-                    "verde" if dist_cu < 20 else "naranja",
+                    "verde" if dist_cu < 10 else "naranja" if dist_cu < 25 else "rojo",
                 )
 
         # ── C2 · Distancia a la vía transitable más cercana ──────────
