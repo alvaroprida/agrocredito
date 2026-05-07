@@ -63,11 +63,11 @@ def _get_aptitud_cached(_gdf_predio, cultivo: str):
     return get_aptitud_api(_gdf_predio, cultivo)
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_distancia_centro_cached(lat: float, lon: float):
+def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
     return get_distancia_centro_urbano(lat, lon)
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_distancia_via_cached(lat: float, lon: float):
+def _get_distancia_via_cached(lat: float, lon: float, v: int = 2):
     return get_distancia_via(lat, lon)
 
 # ── Configuración de página ───────────────────────────────────────────────────
@@ -1081,16 +1081,16 @@ with tab_validacion:
         if infra_via is not None:
             n_lat = infra_via.get("nearest_lat")
             n_lon = infra_via.get("nearest_lon")
-            if n_lat is not None:
+            if n_lat is not None and n_lon is not None:
                 folium.PolyLine(
                     locations=[[lat, lon], [n_lat, n_lon]],
-                    color="#f59e0b", weight=2, opacity=0.9, dash_array="8",
-                    tooltip=f"🟡 Vía más cercana: {infra_via['distancia_m']:.0f} m en línea recta",
+                    color="#dc2626", weight=2.5, opacity=1.0, dash_array="6 6",
+                    tooltip=f"Distancia a vía: {infra_via['distancia_m']:.0f} m (línea recta)",
                 ).add_to(m_infra)
                 folium.CircleMarker(
                     location=[n_lat, n_lon],
-                    radius=6, color="#f59e0b", fill=True,
-                    fill_color="#f59e0b", fill_opacity=0.9,
+                    radius=6, color="#dc2626", fill=True,
+                    fill_color="#dc2626", fill_opacity=0.9,
                     tooltip=f"Punto en vía · {infra_via['nombre']} ({infra_via['tipo']})",
                 ).add_to(m_infra)
 
