@@ -45,10 +45,10 @@ import geopandas as gpd
 from utils.postgis_client import (
     get_predio_por_punto,
     get_frontera,
-    get_aptitud,
     get_valor_potencial,
     get_construcciones,
 )
+from utils.aptitud_api import get_aptitud_api, CULTIVO_API_MAP, score_to_category
 from utils.eosda_terrain  import get_terrain_analysis
 from utils.eosda_ndvi     import get_ndvi_analysis
 from utils.risk_scoring   import (
@@ -56,6 +56,10 @@ from utils.risk_scoring   import (
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
 )
 from utils.report_generator import generate_exante_report
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_aptitud_cached(gdf_predio, cultivo: str):
+    return get_aptitud_api(gdf_predio, cultivo)
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
@@ -848,35 +852,72 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     st.markdown("### 🌱 B · Validación de Continuidad Productiva")
 
-    with st.expander(f"🌾 B1 · Aptitud al Cultivo ({cultivo.capitalize()})", expanded=True):
-        with st.spinner("Cargando aptitud del cultivo..."):
-            gdf_aptitud = get_aptitud(predio["gdf"], cultivo)
+    with st.expander(f"🌾 B1 · Aptitud al Cultivo ({cultivo})", expanded=True):
+        with st.spinner("Calculando aptitud vía API datos.gov.co …"):
+            apt_result = _get_aptitud_cached(predio["gdf"], cultivo)
+
+        if apt_result is None:
+            cultivos_con_api = ", ".join(CULTIVO_API_MAP.keys())
+            st.warning(
+                f"No hay API de aptitud disponible para **{cultivo}** en datos.gov.co.\n\n"
+                f"Cultivos con API disponible: {cultivos_con_api}."
+            )
+            gdf_aptitud = None
+
+        elif apt_result["error"]:
+            st.error(f"❌ Error consultando API de aptitud: {apt_result['error']}")
+            gdf_aptitud = None
+
+        else:
+            gdf_aptitud = apt_result["gdf"]
+            score       = apt_result["score"]
+            category    = apt_result["category"]
+
+            # ── Métricas de aptitud ───────────────────────────────────────
+            color_cat = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(category, "⚪")
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                st.metric("Score de Aptitud", f"{score:.2f}",
+                          help="Score ponderado por área: 0 = No apta · 1 = Alta aptitud")
+            with mc2:
+                st.metric("Categoría de Aptitud", f"{color_cat} {category}")
+            with mc3:
+                st.metric("Fuente", "UPRA · datos.gov.co")
+
         st.session_state["gdf_aptitud"] = gdf_aptitud
 
-        c1,c2 = st.columns(2)
+        c1, c2 = st.columns(2)
         with c1: ver_predio_b1  = st.checkbox("🟢 Predio",  value=True, key="b1_predio")
         with c2: ver_aptitud_b1 = st.checkbox("🟦 Aptitud", value=True, key="b1_apt")
 
         def estilo_aptitud(feature):
-            color = COLORES_APTITUD.get(feature["properties"].get("aptitud",""), "#3b82f6")
-            return {"fillColor":color,"color":color,"weight":1.5,"fillOpacity":0.45}
+            color = COLORES_APTITUD.get(feature["properties"].get("aptitud", ""), "#3b82f6")
+            return {"fillColor": color, "color": color, "weight": 1.5, "fillOpacity": 0.45}
 
         st_folium(mapa_capa(
             predio["gdf"], gdf_aptitud,
             mostrar_predio=ver_predio_b1, mostrar_capa=ver_aptitud_b1,
             estilo_capa_fn=estilo_aptitud,
-            campos_tooltip=["aptitud","area_ha","pct_predio"],
-            aliases_tooltip=["Aptitud","Área (ha)","% predio"],
+            campos_tooltip=["aptitud", "area_ha", "pct_predio"],
+            aliases_tooltip=["Aptitud", "Área (ha)", "% predio"],
             nombre_capa="Aptitud cultivo",
         ), width=700, height=380, returned_objects=[], key="map_b1")
 
         if gdf_aptitud is not None and len(gdf_aptitud) > 0:
-            df_apt = gdf_aptitud.groupby("aptitud").agg(
-                area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
-            ).reset_index().rename(columns={"aptitud":"Aptitud",
-                                            "area_ha":"Área (ha)","pct_predio":"% del predio"})
+            df_apt = (
+                gdf_aptitud
+                .groupby("aptitud")
+                .agg(area_ha=("area_ha", "sum"), pct_predio=("pct_predio", "sum"))
+                .reset_index()
+                .rename(columns={"aptitud": "Aptitud",
+                                 "area_ha": "Área (ha)", "pct_predio": "% del predio"})
+            )
             st.dataframe(df_apt, use_container_width=True, hide_index=True)
-        else:
+            st.caption(
+                "Pesos por categoría: Alta → 1.00 · Media → 0.67 · Baja → 0.33 · No apta → 0  |  "
+                "Alta ≥ 0.70 · Media ≥ 0.40 · Baja < 0.40"
+            )
+        elif apt_result is not None and apt_result.get("error") is None:
             st.warning("No se encontró información de aptitud para este predio.")
 
     with st.expander("💎 B2 · Valor Potencial del Suelo", expanded=True):
