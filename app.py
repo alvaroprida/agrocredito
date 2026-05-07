@@ -952,10 +952,34 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     with st.expander("🏗️ C · Validación de Infraestructura Productiva", expanded=False):
 
+        st.caption(
+            "Evalúa la conectividad física del predio con los mercados y la red vial. "
+            "El semáforo global refleja el peor de los dos indicadores: un predio cerca "
+            "de la ciudad pero sin acceso a carretera tiene el mismo riesgo logístico "
+            "que uno alejado con buena vía."
+        )
+
         with st.spinner("Calculando distancias de infraestructura vía OSM / OSRM …"):
             infra_centro = _get_distancia_centro_cached(lat, lon)
             infra_via    = _get_distancia_via_cached(lat, lon)
 
+        # ── Semáforo global (peor caso) ───────────────────────────────
+        _COLOR_RANK = {"verde": 0, "naranja": 1, "rojo": 2}
+        _color_cu  = (
+            "verde" if infra_centro and infra_centro["distancia_km"] < 10 else
+            "naranja" if infra_centro and infra_centro["distancia_km"] < 25 else
+            "rojo"
+        )
+        _color_via = (
+            "verde" if infra_via and infra_via["distancia_m"] < 500 else
+            "naranja" if infra_via and infra_via["distancia_m"] < 2000 else
+            "rojo"
+        )
+        _color_global = max([_color_cu, _color_via], key=lambda c: _COLOR_RANK[c])
+        _label_global = {"verde": "Acceso adecuado", "naranja": "Acceso medio", "rojo": "Acceso bajo"}[_color_global]
+        semaforo(f"**{_label_global}** · Ambos indicadores deben cumplirse para calificar verde.", _color_global)
+
+        st.markdown("---")
         c1, c2 = st.columns(2)
 
         # ── C1 · Distancia al centro urbano más cercano ───────────────
@@ -972,9 +996,9 @@ with tab_validacion:
                     f"{infra_centro['dist_recta_km']} km en línea recta"
                 )
                 semaforo(
-                    f"Acceso {'adecuado' if dist_cu < 10 else 'medio' if dist_cu < 25 else 'bajo'} "
-                    f"({dist_cu} km por carretera).",
-                    "verde" if dist_cu < 10 else "naranja" if dist_cu < 25 else "rojo",
+                    f"{'< 10 km' if dist_cu < 10 else '10–25 km' if dist_cu < 25 else '> 25 km'} "
+                    f"por carretera ({dist_cu} km).",
+                    _color_cu,
                 )
 
         # ── C2 · Distancia a la vía transitable más cercana ──────────
@@ -985,36 +1009,44 @@ with tab_validacion:
             else:
                 dist_via_m  = infra_via["distancia_m"]
                 dist_via_km = infra_via["distancia_km"]
-                kpi("Distancia (línea recta)", dist_via_m, "m")
+                kpi("Distancia en línea recta", dist_via_m, "m")
                 st.caption(
                     f"**{infra_via['nombre']}** · tipo: `{infra_via['tipo']}` · "
                     f"{dist_via_km} km"
                 )
                 semaforo(
-                    f"Acceso {'directo' if dist_via_m < 500 else 'próximo' if dist_via_m < 2000 else 'alejado'} "
-                    f"a vía ({dist_via_m:.0f} m).",
-                    "verde" if dist_via_m < 500 else "naranja" if dist_via_m < 2000 else "rojo",
+                    f"{'< 500 m' if dist_via_m < 500 else '500 m – 2 km' if dist_via_m < 2000 else '> 2 km'} "
+                    f"a vía transitable ({dist_via_m:.0f} m).",
+                    _color_via,
                 )
 
         # ── Leyenda de umbrales ───────────────────────────────────────
         st.markdown("""
-<table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:0.5rem">
+<table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:0.8rem">
+<thead><tr style="background:#f1f5f9;font-weight:600;text-align:center">
+  <td style="padding:5px 10px">Condición</td>
+  <td style="padding:5px 10px">Centro urbano</td>
+  <td style="padding:5px 10px">Vía transitable</td>
+</tr></thead>
 <tr style="background:#d1fae5;text-align:center">
-  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🟢 <b>Acceso adecuado</b></td>
-  <td style="padding:6px 10px">Centro urbano &lt; 10 km</td>
-  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable &lt; 500 m</td>
+  <td style="padding:6px 10px">🟢 Acceso adecuado</td>
+  <td style="padding:6px 10px">&lt; 10 km por carretera</td>
+  <td style="padding:6px 10px">&lt; 500 m en línea recta</td>
 </tr>
 <tr style="background:#fef3c7;text-align:center">
-  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🟡 <b>Acceso medio</b></td>
-  <td style="padding:6px 10px">Centro urbano 10–25 km</td>
-  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable 500 m – 2 km</td>
+  <td style="padding:6px 10px">🟡 Acceso medio</td>
+  <td style="padding:6px 10px">10 – 25 km</td>
+  <td style="padding:6px 10px">500 m – 2 km</td>
 </tr>
 <tr style="background:#fee2e2;text-align:center">
-  <td style="padding:6px 10px;border-radius:4px 0 0 4px">🔴 <b>Acceso bajo</b></td>
-  <td style="padding:6px 10px">Centro urbano &gt; 25 km</td>
-  <td style="padding:6px 10px;border-radius:0 4px 4px 0">Vía transitable &gt; 2 km</td>
+  <td style="padding:6px 10px">🔴 Acceso bajo</td>
+  <td style="padding:6px 10px">&gt; 25 km</td>
+  <td style="padding:6px 10px">&gt; 2 km</td>
 </tr>
 </table>
+<p style="font-size:0.75rem;color:#64748b;margin-top:4px">
+  El semáforo global toma el peor de los dos indicadores.
+</p>
 """, unsafe_allow_html=True)
 
         # ── Mapa de infraestructura ───────────────────────────────────
@@ -1030,13 +1062,11 @@ with tab_validacion:
         ).add_to(m_infra)
 
         if infra_centro is not None:
-            # Ruta por carretera al centro urbano
             folium.PolyLine(
                 locations=infra_centro["coords"],
                 color="#3b82f6", weight=3, opacity=0.85,
-                tooltip=f"Ruta carretera: {infra_centro['distancia_km']} km · {infra_centro['duracion_min']} min",
+                tooltip=f"🔵 Ruta carretera: {infra_centro['distancia_km']} km · {infra_centro['duracion_min']} min",
             ).add_to(m_infra)
-            # Marcador del centro urbano (requiere lat/lon en el dict)
             cu_lat = infra_centro.get("lat")
             cu_lon = infra_centro.get("lon")
             if cu_lat is None and infra_centro["coords"]:
@@ -1052,17 +1082,16 @@ with tab_validacion:
             n_lat = infra_via.get("nearest_lat")
             n_lon = infra_via.get("nearest_lon")
             if n_lat is not None:
-                # Línea recta al punto más cercano en vía
                 folium.PolyLine(
                     locations=[[lat, lon], [n_lat, n_lon]],
                     color="#f59e0b", weight=2, opacity=0.9, dash_array="8",
-                    tooltip=f"Vía más cercana: {infra_via['distancia_m']:.0f} m",
+                    tooltip=f"🟡 Vía más cercana: {infra_via['distancia_m']:.0f} m en línea recta",
                 ).add_to(m_infra)
                 folium.CircleMarker(
                     location=[n_lat, n_lon],
                     radius=6, color="#f59e0b", fill=True,
                     fill_color="#f59e0b", fill_opacity=0.9,
-                    tooltip=f"Punto en vía ({infra_via['nombre']} · {infra_via['tipo']})",
+                    tooltip=f"Punto en vía · {infra_via['nombre']} ({infra_via['tipo']})",
                 ).add_to(m_infra)
 
         _fit(m_infra, predio["gdf"])
