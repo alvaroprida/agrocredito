@@ -1253,29 +1253,46 @@ with tab_validacion:
                 st.info("No se pudieron calcular indicadores para este cultivo.")
             else:
                 # ── Semáforo global ──────────────────────────────────
-                _color_map = {"verde": "#d1fae5", "naranja": "#fef3c7", "rojo": "#fee2e2"}
-                _border_map= {"verde": "#059669",  "naranja": "#d97706",  "rojo": "#dc2626"}
+                _COLOR_BG = {
+                    "verde":    "#d1fae5", "amarillo": "#dcfce7",
+                    "naranja":  "#fef9c3", "rojo":     "#fed7aa",
+                    "granate":  "#fee2e2", "gris":     "#f1f5f9",
+                }
+                _COLOR_BD = {
+                    "verde":    "#22c55e", "amarillo": "#86efac",
+                    "naranja":  "#eab308", "rojo":     "#f97316",
+                    "granate":  "#ef4444", "gris":     "#94a3b8",
+                }
+                _EMOJI_5 = {
+                    "verde":   "🟢", "amarillo": "🟡",
+                    "naranja": "🟠", "rojo":     "🔴",
+                    "granate": "⛔", "gris":     "⚪",
+                }
                 _worst_score = df_risk["score_p80"].dropna().max() if "score_p80" in df_risk.columns else None
                 if _worst_score is not None:
                     _gl = score_to_label(_worst_score)
                     _gc = score_to_color(_worst_score)
-                    _n_rojo    = (df_risk["riesgo_color"] == "rojo").sum()
-                    _n_naranja = (df_risk["riesgo_color"] == "naranja").sum()
-                    _n_verde   = (df_risk["riesgo_color"] == "verde").sum()
+                    _n_granate  = (df_risk["riesgo_color"] == "granate").sum()
+                    _n_rojo     = (df_risk["riesgo_color"] == "rojo").sum()
+                    _n_naranja  = (df_risk["riesgo_color"] == "naranja").sum()
+                    _n_amarillo = (df_risk["riesgo_color"] == "amarillo").sum()
+                    _n_verde    = (df_risk["riesgo_color"] == "verde").sum()
                     st.markdown(
-                        f'<div style="background:{_color_map[_gc]};border-left:6px solid '
-                        f'{_border_map[_gc]};padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
+                        f'<div style="background:{_COLOR_BG[_gc]};border-left:6px solid '
+                        f'{_COLOR_BD[_gc]};padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
                         f'<b style="font-size:1.05rem">Riesgo global: {_gl}</b>'
                         f'<span style="font-size:0.82rem;margin-left:1rem">'
-                        f'🔴 {_n_rojo} alto/extremo · '
-                        f'🟡 {_n_naranja} medio · '
-                        f'🟢 {_n_verde} bajo/sin riesgo'
+                        f'⛔ {_n_granate} extremo · '
+                        f'🔴 {_n_rojo} alto · '
+                        f'🟠 {_n_naranja} medio · '
+                        f'🟡 {_n_amarillo} bajo · '
+                        f'🟢 {_n_verde} sin riesgo'
                         f'</span></div>',
                         unsafe_allow_html=True,
                     )
 
                 # ── Tabla de indicadores por categoría ───────────────
-                _EMOJI = {"verde": "🟢", "naranja": "🟡", "rojo": "🔴"}
+                _EMOJI = _EMOJI_5
                 _UNIT_ES = {"day": "días", "days": "días", "month": "meses", "months": "meses", "date": "fecha"}
 
                 def _doy_to_mmdd(doy: float) -> str:

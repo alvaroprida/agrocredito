@@ -138,10 +138,12 @@ def score_to_label(score: float) -> str:
 
 
 def score_to_color(score: float) -> str:
-    if pd.isna(score): return "rojo"
-    if score <= 0.25:  return "verde"
-    if score <= 0.50:  return "naranja"
-    return "rojo"
+    if pd.isna(score):  return "gris"
+    if score <= 0.00:   return "verde"
+    if score <= 0.25:   return "amarillo"
+    if score <= 0.50:   return "naranja"
+    if score <= 0.75:   return "rojo"
+    return "granate"
 
 
 # ── Parsing de condiciones ────────────────────────────────────────────────────
