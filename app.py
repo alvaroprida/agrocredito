@@ -1268,7 +1268,7 @@ with tab_validacion:
 
                 # ── Tabla de indicadores por categoría ───────────────
                 _EMOJI = {"verde": "🟢", "naranja": "🟡", "rojo": "🔴"}
-                _UNIT_ES = {"day": "día", "days": "días", "month": "mes", "months": "meses", "date": "día del año"}
+                _UNIT_ES = {"day": "días", "days": "días", "month": "meses", "months": "meses", "date": "día del año"}
                 for cat in df_risk["Categoría_riesgo"].unique():
                     df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
                     st.markdown(f"**{cat}**")
@@ -1299,7 +1299,9 @@ with tab_validacion:
                               "Sin_riesgo_0", "Riesgo_bajo_0.25",
                               "Riesgo_medio_0.5", "Riesgo_alto_0.75",
                               "Riesgo_extremo_1", "Forma_curva"]
-                df_curva = df_risk[cols_curva].rename(columns={
+                df_curva = df_risk[cols_curva].copy()
+                df_curva["Unidad"] = df_curva["Unidad"].map(lambda u: _UNIT_ES.get(str(u), u))
+                df_curva = df_curva.rename(columns={
                     "Nombre_indicador":  "Indicador",
                     "Sin_riesgo_0":      "Sin riesgo",
                     "Riesgo_bajo_0.25":  "Bajo (0.25)",
