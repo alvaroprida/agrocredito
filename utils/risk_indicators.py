@@ -19,14 +19,8 @@ from pathlib import Path
 # ── Ruta de la matriz ─────────────────────────────────────────────────────────
 _MATRIX_PATH = Path(__file__).parent.parent / "datos" / "indicadores" / "matriz_vulnerabilidad_consolidada.xlsx"
 
-_matrix_cache: pd.DataFrame | None = None
-
-
 def _get_matrix() -> pd.DataFrame:
-    global _matrix_cache
-    if _matrix_cache is None:
-        _matrix_cache = pd.read_excel(_MATRIX_PATH)
-    return _matrix_cache
+    return pd.read_excel(_MATRIX_PATH)
 
 
 def get_indicators_for_crop(cultivo_app: str) -> pd.DataFrame:
