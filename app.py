@@ -73,10 +73,18 @@ def _get_climate_cached(lat: float, lon: float, cultivo: str):
     extra = needed_extra_hourly(cultivo)
     return get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
 
-_MATRIX_VER = 4  # incrementar al actualizar la matriz de vulnerabilidad
+def _matrix_mtime() -> float:
+    """Tiempo de modificación del Excel de vulnerabilidad (cache key dinámico)."""
+    import os
+    from pathlib import Path
+    p = Path(__file__).parent / "datos" / "indicadores" / "matriz_vulnerabilidad_consolidada.xlsx"
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0.0
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_risk_cached(lat: float, lon: float, cultivo: str, matrix_ver: int = _MATRIX_VER):
+def _get_risk_cached(lat: float, lon: float, cultivo: str, mtime: float = 0.0):
     extra = needed_extra_hourly(cultivo)
     df = get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
     return compute_risk_for_crop(df, cultivo)
@@ -1239,7 +1247,7 @@ with tab_validacion:
             st.warning("Se necesitan datos climáticos para calcular los indicadores (ver D1).")
         else:
             with st.spinner("Calculando indicadores de riesgo …"):
-                df_risk = _get_risk_cached(c_lat, c_lon, cultivo)
+                df_risk = _get_risk_cached(c_lat, c_lon, cultivo, mtime=_matrix_mtime())
 
             if df_risk.empty:
                 st.info("No se pudieron calcular indicadores para este cultivo.")
