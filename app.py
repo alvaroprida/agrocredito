@@ -1268,19 +1268,20 @@ with tab_validacion:
 
                 # ── Tabla de indicadores por categoría ───────────────
                 _EMOJI = {"verde": "🟢", "naranja": "🟡", "rojo": "🔴"}
+                _UNIT_ES = {"day": "día", "days": "días", "month": "mes", "months": "meses", "date": "día del año"}
                 for cat in df_risk["Categoría_riesgo"].unique():
                     df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
                     st.markdown(f"**{cat}**")
                     rows_disp = []
                     for _, r in df_cat.iterrows():
                         em = _EMOJI.get(r["riesgo_color"], "⚪")
+                        unidad = _UNIT_ES.get(str(r["Unidad"]), r["Unidad"])
                         rows_disp.append({
                             "Riesgo": f"{em} {r['riesgo_label']}",
                             "Indicador": r["Nombre_indicador"],
-                            "Valor medio": f"{r['valor_medio']} {r['Unidad']}",
-                            "Valor P80":   f"{r['valor_p80']} {r['Unidad']}",
+                            "Valor medio": f"{r['valor_medio']} {unidad}",
+                            "Valor P80":   f"{r['valor_p80']} {unidad}",
                             "Score P80":   f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—",
-                            "Impacto rendimiento (alto)": r.get("Impacto_rendimiento_alto", "—"),
                         })
                     st.dataframe(
                         pd.DataFrame(rows_disp),
