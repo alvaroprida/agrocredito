@@ -49,7 +49,12 @@ from utils.postgis_client import (
     get_construcciones,
 )
 from utils.aptitud_api import get_aptitud_api, CULTIVO_API_MAP, score_to_category
-from utils.infraestructura import get_distancia_centro_urbano, get_distancia_via
+from utils.infraestructura  import get_distancia_centro_urbano, get_distancia_via
+from utils.climate_data     import get_historical_climate, monthly_climatology
+from utils.risk_indicators  import (
+    compute_risk_for_crop, crops_with_matrix,
+    score_to_label, score_to_color,
+)
 from utils.eosda_terrain  import get_terrain_analysis
 from utils.eosda_ndvi     import get_ndvi_analysis
 from utils.risk_scoring   import (
@@ -61,6 +66,15 @@ from utils.report_generator import generate_exante_report
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_aptitud_cached(_gdf_predio, cultivo: str):
     return get_aptitud_api(_gdf_predio, cultivo)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_climate_cached(lat: float, lon: float):
+    return get_historical_climate(lat, lon, n_years=10)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_risk_cached(lat: float, lon: float, cultivo: str):
+    df = get_historical_climate(lat, lon, n_years=10)
+    return compute_risk_for_crop(df, cultivo)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
@@ -1115,39 +1129,183 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 🌧️ D · Análisis de Riesgo Agroclimático")
-    st.caption("Series históricas · Matriz de vulnerabilidad con umbrales editables · Scoring 15 indicadores")
+    st.caption(
+        "Datos históricos diarios ERA5 (Open-Meteo, 10 años) · "
+        "Indicadores calculados según matriz de vulnerabilidad por cultivo · "
+        "Score de riesgo P80 anual"
+    )
 
-    with st.expander("📊 D1 · Series Climáticas Históricas", expanded=True):
-        c1,c2 = st.columns(2)
-        with c1:
-            fig_p = px.bar(x=MESES, y=d["precip_mensual"],
-                           labels={"x":"Mes","y":"mm"},
-                           title="Precipitación media mensual (mm)",
-                           color_discrete_sequence=["#3b82f6"])
-            fig_p.update_layout(height=260, margin=dict(t=40,b=20))
-            st.plotly_chart(fig_p, use_container_width=True)
-        with c2:
-            fig_t = go.Figure()
-            fig_t.add_trace(go.Scatter(x=MESES, y=d["temp_max_mensual"],
-                                       name="T_máx", line=dict(color="#ef4444")))
-            fig_t.add_trace(go.Scatter(x=MESES, y=d["temp_min_mensual"],
-                                       name="T_mín", line=dict(color="#3b82f6"),
-                                       fill="tonexty",
-                                       fillcolor="rgba(59,130,246,0.1)"))
-            fig_t.update_layout(title="Temperatura mensual (°C)",
-                                 height=260, margin=dict(t=40,b=20))
-            st.plotly_chart(fig_t, use_container_width=True)
+    # ── Descarga de datos climáticos ─────────────────────────────────
+    _clima_ok = False
+    try:
+        with st.spinner("Descargando datos climáticos históricos (Open-Meteo ERA5) …"):
+            df_clima   = _get_climate_cached(c_lat, c_lon)
+            df_monthly = monthly_climatology(df_clima)
+        _clima_ok = True
+    except Exception as _e_clima:
+        st.warning(f"No se pudo descargar datos climáticos: {_e_clima}")
+        df_clima, df_monthly = None, None
 
-        fig_ndvi2 = px.line(x=MESES, y=d["ndvi_mensual_hist"],
-                            labels={"x":"Mes","y":"NDVI"},
-                            title="NDVI mensual histórico",
-                            color_discrete_sequence=["#16a34a"])
-        fig_ndvi2.add_hline(y=d["ndvi_umbral"], line_dash="dash", line_color="#dc2626",
-                            annotation_text=f"Umbral {d['ndvi_umbral']}")
-        fig_ndvi2.update_layout(height=220, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_ndvi2, use_container_width=True)
+    MESES_ES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
-    with st.expander("⚙️ D2 · Matriz de Vulnerabilidad — Umbrales por Indicador", expanded=True):
+    with st.expander("📊 D1 · Datos Climáticos Históricos (ERA5 · 10 años)", expanded=True):
+        if not _clima_ok or df_monthly is None:
+            st.info("No se pudieron cargar los datos climáticos históricos.")
+        else:
+            n_yrs = df_clima["year"].nunique()
+            st.caption(
+                f"Fuente: Open-Meteo ERA5 · {n_yrs} años · lat {c_lat:.4f}, lon {c_lon:.4f} · "
+                "Valores promediados por mes sobre el período histórico completo."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                fig_p = px.bar(
+                    x=MESES_ES, y=df_monthly["pr_mean"].round(1),
+                    labels={"x": "Mes", "y": "mm"},
+                    title="Precipitación media mensual (mm)",
+                    color_discrete_sequence=["#3b82f6"],
+                )
+                fig_p.update_layout(height=260, margin=dict(t=40, b=20))
+                st.plotly_chart(fig_p, use_container_width=True)
+            with c2:
+                fig_t = go.Figure()
+                fig_t.add_trace(go.Scatter(
+                    x=MESES_ES, y=df_monthly["tmax_mean"].round(1),
+                    name="T máx", line=dict(color="#ef4444", width=2),
+                ))
+                fig_t.add_trace(go.Scatter(
+                    x=MESES_ES, y=df_monthly["tmin_mean"].round(1),
+                    name="T mín", line=dict(color="#3b82f6", width=2),
+                    fill="tonexty", fillcolor="rgba(59,130,246,0.1)",
+                ))
+                fig_t.add_trace(go.Scatter(
+                    x=MESES_ES, y=df_monthly["tavg_mean"].round(1),
+                    name="T media", line=dict(color="#f59e0b", width=1.5, dash="dot"),
+                ))
+                fig_t.update_layout(
+                    title="Temperatura mensual (°C)",
+                    height=260, margin=dict(t=40, b=20),
+                    yaxis_title="°C",
+                )
+                st.plotly_chart(fig_t, use_container_width=True)
+
+            c3, c4 = st.columns(2)
+            with c3:
+                fig_rh = px.line(
+                    x=MESES_ES, y=df_monthly["rh_mean"].round(1),
+                    labels={"x": "Mes", "y": "%"},
+                    title="Humedad relativa media mensual (%)",
+                    color_discrete_sequence=["#8b5cf6"],
+                )
+                fig_rh.add_hline(y=80, line_dash="dash", line_color="#dc2626",
+                                 annotation_text="80%")
+                fig_rh.update_layout(height=240, margin=dict(t=40, b=20))
+                st.plotly_chart(fig_rh, use_container_width=True)
+            with c4:
+                fig_wd = px.bar(
+                    x=MESES_ES, y=df_monthly["pr_days"].round(0),
+                    labels={"x": "Mes", "y": "días"},
+                    title="Días con lluvia > 1 mm / mes",
+                    color_discrete_sequence=["#0ea5e9"],
+                )
+                fig_wd.update_layout(height=240, margin=dict(t=40, b=20))
+                st.plotly_chart(fig_wd, use_container_width=True)
+
+    # ── D2 · Indicadores de Riesgo Agroclimático ─────────────────────
+    _cultivos_con_matriz = crops_with_matrix()
+    _cultivo_tiene_matriz = cultivo in _cultivos_con_matriz
+
+    with st.expander(
+        f"🌡️ D2 · Indicadores de Riesgo Agroclimático · {cultivo}",
+        expanded=True,
+    ):
+        st.caption(
+            "Score de riesgo calculado para cada indicador de la matriz de vulnerabilidad. "
+            "Se usa el **percentil 80 anual** (escenario adverso 1 de cada 5 años) como "
+            "referencia para el análisis crediticio."
+        )
+
+        if not _cultivo_tiene_matriz:
+            st.warning(
+                f"No hay matriz de vulnerabilidad disponible para **{cultivo}**. "
+                f"Cultivos con matriz: {', '.join(_cultivos_con_matriz)}."
+            )
+        elif not _clima_ok:
+            st.warning("Se necesitan datos climáticos para calcular los indicadores (ver D1).")
+        else:
+            with st.spinner("Calculando indicadores de riesgo …"):
+                df_risk = _get_risk_cached(c_lat, c_lon, cultivo)
+
+            if df_risk.empty:
+                st.info("No se pudieron calcular indicadores para este cultivo.")
+            else:
+                # ── Semáforo global ──────────────────────────────────
+                _color_map = {"verde": "#d1fae5", "naranja": "#fef3c7", "rojo": "#fee2e2"}
+                _border_map= {"verde": "#059669",  "naranja": "#d97706",  "rojo": "#dc2626"}
+                _worst_score = df_risk["score_p80"].dropna().max() if "score_p80" in df_risk.columns else None
+                if _worst_score is not None:
+                    _gl = score_to_label(_worst_score)
+                    _gc = score_to_color(_worst_score)
+                    _n_rojo    = (df_risk["riesgo_color"] == "rojo").sum()
+                    _n_naranja = (df_risk["riesgo_color"] == "naranja").sum()
+                    _n_verde   = (df_risk["riesgo_color"] == "verde").sum()
+                    st.markdown(
+                        f'<div style="background:{_color_map[_gc]};border-left:6px solid '
+                        f'{_border_map[_gc]};padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
+                        f'<b style="font-size:1.05rem">Riesgo global: {_gl}</b>'
+                        f'<span style="font-size:0.82rem;margin-left:1rem">'
+                        f'🔴 {_n_rojo} alto/extremo · '
+                        f'🟡 {_n_naranja} medio · '
+                        f'🟢 {_n_verde} bajo/sin riesgo'
+                        f'</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # ── Tabla de indicadores por categoría ───────────────
+                _EMOJI = {"verde": "🟢", "naranja": "🟡", "rojo": "🔴"}
+                for cat in df_risk["Categoría_riesgo"].unique():
+                    df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
+                    st.markdown(f"**{cat}**")
+                    rows_disp = []
+                    for _, r in df_cat.iterrows():
+                        em = _EMOJI.get(r["riesgo_color"], "⚪")
+                        rows_disp.append({
+                            "Riesgo": f"{em} {r['riesgo_label']}",
+                            "Indicador": r["Nombre_indicador"],
+                            "Valor medio": f"{r['valor_medio']} {r['Unidad']}",
+                            "Valor P80":   f"{r['valor_p80']} {r['Unidad']}",
+                            "Score P80":   f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—",
+                            "Impacto rendimiento (alto)": r.get("Impacto_rendimiento_alto", "—"),
+                        })
+                    st.dataframe(
+                        pd.DataFrame(rows_disp),
+                        use_container_width=True, hide_index=True,
+                    )
+
+                # ── Curvas de vulnerabilidad ──────────────────────────
+                st.markdown("---")
+                st.markdown("**Curvas de vulnerabilidad por indicador**")
+                st.caption(
+                    "Valores de referencia que delimitan cada nivel de riesgo. "
+                    "El score P80 es el usado para la clasificación."
+                )
+                cols_curva = ["Nombre_indicador", "Unidad",
+                              "Sin_riesgo_0", "Riesgo_bajo_0.25",
+                              "Riesgo_medio_0.5", "Riesgo_alto_0.75",
+                              "Riesgo_extremo_1", "Forma_curva"]
+                df_curva = df_risk[cols_curva].rename(columns={
+                    "Nombre_indicador":  "Indicador",
+                    "Sin_riesgo_0":      "Sin riesgo",
+                    "Riesgo_bajo_0.25":  "Bajo (0.25)",
+                    "Riesgo_medio_0.5":  "Medio (0.50)",
+                    "Riesgo_alto_0.75":  "Alto (0.75)",
+                    "Riesgo_extremo_1":  "Extremo (1.0)",
+                    "Forma_curva":       "Curva",
+                })
+                st.dataframe(df_curva, use_container_width=True, hide_index=True)
+
+    # ── D3/D4 · Scoring legacy (umbrales manuales) ───────────────────
+    with st.expander("⚙️ D3 · Matriz de Vulnerabilidad — Umbrales por Indicador", expanded=True):
         st.caption(
             "Los umbrales definen los niveles **Sin riesgo / Bajo / Medio / Alto / Extremo** "
             "para cada indicador. Selecciona el cultivo para cargar los valores predefinidos, "
@@ -1228,7 +1386,7 @@ with tab_validacion:
             unsafe_allow_html=True,
         )
 
-    with st.expander("🎯 D3 · Resultados del Scoring", expanded=True):
+    with st.expander("🎯 D4 · Resultados del Scoring (manual)", expanded=True):
         if st.button("🔍 Calcular scoring de riesgo", type="primary",
                      use_container_width=True, key="btn_scoring"):
             umbrales_final = st.session_state.get("umbrales_edit",
