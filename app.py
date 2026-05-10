@@ -1292,11 +1292,19 @@ with tab_validacion:
                     )
 
                 # ── Tabla de indicadores por categoría ───────────────
-                _EMOJI = _EMOJI_5
                 _UNIT_ES = {"day": "días", "days": "días", "month": "meses", "months": "meses", "date": "fecha"}
+                _ROW_BG = {
+                    "verde":   "#d1fae5", "amarillo": "#dcfce7",
+                    "naranja": "#fef9c3", "rojo":     "#fed7aa",
+                    "granate": "#fca5a5", "gris":     "#f8fafc",
+                }
+                _LABEL_COLOR = {
+                    "verde":   "#166534", "amarillo": "#166534",
+                    "naranja": "#713f12", "rojo":     "#7c2d12",
+                    "granate": "#7f1d1d", "gris":     "#475569",
+                }
 
                 def _doy_to_mmdd(doy: float) -> str:
-                    """Convierte día del año (float) a cadena MM/DD."""
                     from datetime import date, timedelta
                     try:
                         d = date(2001, 1, 1) + timedelta(days=int(round(doy)) - 1)
@@ -1307,25 +1315,38 @@ with tab_validacion:
                 for cat in df_risk["Categoría_riesgo"].unique():
                     df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
                     st.markdown(f"**{cat}**")
-                    rows_disp = []
+                    rows_html = ""
                     for _, r in df_cat.iterrows():
-                        em = _EMOJI.get(r["riesgo_color"], "⚪")
+                        color   = r.get("riesgo_color", "gris")
+                        bg      = _ROW_BG.get(color, "#f8fafc")
+                        fg      = _LABEL_COLOR.get(color, "#1e293b")
+                        em      = _EMOJI_5.get(color, "⚪")
                         is_date = str(r["Unidad"]) == "date"
-                        unidad = _UNIT_ES.get(str(r["Unidad"]), r["Unidad"])
-                        def _fmt(v):
-                            if v is None:
-                                return "—"
-                            return _doy_to_mmdd(v) if is_date else f"{v} {unidad}"
-                        rows_disp.append({
-                            "Riesgo": f"{em} {r['riesgo_label']}",
-                            "Indicador": r["Nombre_indicador"],
-                            "Valor medio": _fmt(r["valor_medio"]),
-                            "Valor P80":   _fmt(r["valor_p80"]),
-                            "Score P80":   f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—",
-                        })
-                    st.dataframe(
-                        pd.DataFrame(rows_disp),
-                        use_container_width=True, hide_index=True,
+                        unidad  = _UNIT_ES.get(str(r["Unidad"]), r["Unidad"])
+                        def _fmt(v, _is_date=is_date, _u=unidad):
+                            if v is None: return "—"
+                            return _doy_to_mmdd(v) if _is_date else f"{v} {_u}"
+                        score_str = f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—"
+                        rows_html += (
+                            f'<tr style="background:{bg}">'
+                            f'<td style="padding:5px 8px;color:{fg};font-weight:600;white-space:nowrap">'
+                            f'{em} {r["riesgo_label"]}</td>'
+                            f'<td style="padding:5px 8px">{r["Nombre_indicador"]}</td>'
+                            f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_medio"])}</td>'
+                            f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_p80"])}</td>'
+                            f'<td style="padding:5px 8px;text-align:right">{score_str}</td>'
+                            f'</tr>'
+                        )
+                    st.markdown(
+                        '<table style="width:100%;border-collapse:collapse;font-size:0.84rem;margin-bottom:0.8rem">'
+                        '<thead><tr style="background:#f1f5f9;font-weight:600;text-align:left">'
+                        '<td style="padding:5px 8px">Riesgo</td>'
+                        '<td style="padding:5px 8px">Indicador</td>'
+                        '<td style="padding:5px 8px;text-align:right">Valor medio</td>'
+                        '<td style="padding:5px 8px;text-align:right">Valor P80</td>'
+                        '<td style="padding:5px 8px;text-align:right">Score P80</td>'
+                        f'</tr></thead><tbody>{rows_html}</tbody></table>',
+                        unsafe_allow_html=True,
                     )
 
                 # ── Curvas de vulnerabilidad ──────────────────────────
