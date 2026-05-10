@@ -73,7 +73,7 @@ def _get_climate_cached(lat: float, lon: float, cultivo: str):
     extra = needed_extra_hourly(cultivo)
     return get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
 
-_MATRIX_VER = 3  # incrementar al actualizar la matriz de vulnerabilidad
+_MATRIX_VER = 4  # incrementar al actualizar la matriz de vulnerabilidad
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_risk_cached(lat: float, lon: float, cultivo: str, matrix_ver: int = _MATRIX_VER):

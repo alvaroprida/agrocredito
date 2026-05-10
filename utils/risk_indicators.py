@@ -6,12 +6,16 @@ Calcula indicadores de riesgo agroclimático a partir de datos diarios
 
 Approach:
   1. Para cada indicador del cultivo, filtra los datos al período relevante.
+     Prioridad: Meses_cálculo (lista) → Fecha_inicio/Fecha_fin → año completo.
+     Los períodos que cruzan el año (ej. oct→abr) usan datos de dos años.
   2. Calcula el valor del indicador año a año (10 años).
   3. Interpola el score [0,1] en la curva de vulnerabilidad.
+     Los breakpoints pueden ser numéricos o en formato MM/DD (ej. soil_warming).
   4. Usa el P80 anual como referencia para el análisis de riesgo crediticio.
 """
 
 import ast
+from datetime import datetime
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -54,24 +58,51 @@ def crops_with_matrix() -> list[str]:
 
 # ── Scoring ───────────────────────────────────────────────────────────────────
 
+def _parse_breakpoint(v):
+    """
+    Convierte un breakpoint de curva a float.
+    Soporta números y formato MM/DD o MM/DD_MM/DD (solo la primera fecha).
+    MM/DD se convierte a día del año usando un año no bisiesto.
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none", "—", "-"):
+        return None
+    # Rango MM/DD_MM/DD → tomar primera fecha
+    if "_" in s:
+        s = s.split("_")[0].strip()
+    # Fecha MM/DD → convertir a día del año
+    if "/" in s:
+        try:
+            dt = datetime.strptime(f"2001/{s}", "%Y/%m/%d")
+            return float(dt.timetuple().tm_yday)
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def score_from_curve(value: float, row: pd.Series) -> float:
     """
     Interpola el score [0,1] dado el valor del indicador y los breakpoints
-    de la curva de vulnerabilidad. Soporta curvas crecientes y decrecientes.
+    de la curva de vulnerabilidad. Soporta curvas crecientes y decrecientes,
+    y breakpoints en formato numérico o MM/DD.
     """
     bp_raw = [
-        (row.get("Sin_riesgo_0"),   0.00),
+        (row.get("Sin_riesgo_0"),     0.00),
         (row.get("Riesgo_bajo_0.25"), 0.25),
         (row.get("Riesgo_medio_0.5"), 0.50),
         (row.get("Riesgo_alto_0.75"), 0.75),
         (row.get("Riesgo_extremo_1"), 1.00),
     ]
     bp = []
-    for v, s in bp_raw:
-        try:
-            bp.append((float(v), s))
-        except (TypeError, ValueError):
-            continue
+    for raw_v, s in bp_raw:
+        parsed = _parse_breakpoint(raw_v)
+        if parsed is not None:
+            bp.append((parsed, s))
     if len(bp) < 2:
         return np.nan
 
@@ -155,7 +186,6 @@ def _day_mask(df: pd.DataFrame, conditions: list[tuple]) -> pd.Series:
     """Retorna máscara booleana: días que cumplen TODAS las condiciones."""
     mask = pd.Series(True, index=df.index)
     for var, op, thr in conditions:
-        # Caso especial: diferencia de temperatura
         if "tmax - tmin" in var or "tmax-tmin" in var:
             col = df["tmax"] - df["tmin"]
         elif "water in soil" in var or "soil" in var:
@@ -163,24 +193,62 @@ def _day_mask(df: pd.DataFrame, conditions: list[tuple]) -> pd.Series:
         elif var in _VAR_MAP:
             col = df[_VAR_MAP[var]]
         else:
-            continue  # variable no disponible → ignorar condición
+            continue
 
-        if op == "<":   mask &= col < thr
-        elif op == ">": mask &= col > thr
+        if op == "<":    mask &= col < thr
+        elif op == ">":  mask &= col > thr
         elif op == "<=": mask &= col <= thr
         elif op == ">=": mask &= col >= thr
 
     return mask
 
 
-def _parse_months(row: pd.Series) -> list[int] | None:
-    """Extrae lista de meses desde Meses_cálculo. None = todos los meses."""
-    raw = row.get("Meses_cálculo", "")
+def _filter_period(df_climate, row, yr):
+    """
+    Filtra el DataFrame climático al período relevante para el indicador en el año yr.
+
+    Prioridad:
+      1. Meses_cálculo (lista de enteros) — sin soporte cross-year.
+      2. Fecha_inicio / Fecha_fin (formato MM-DD) — soporta períodos cross-year
+         (ej. 10-01 → 04-30 usa datos de yr y yr+1).
+      3. Año completo por defecto.
+    """
+    # 1. Meses_cálculo
+    mc_raw = row.get("Meses_cálculo", "")
     try:
-        months = ast.literal_eval(str(raw))
-        return months if months else None
+        months = ast.literal_eval(str(mc_raw))
+        if months:
+            df_yr = df_climate[df_climate["year"] == yr]
+            return df_yr[df_yr["month"].isin(months)]
     except Exception:
-        return None
+        pass
+
+    # 2. Fecha_inicio / Fecha_fin
+    fi_raw = str(row.get("Fecha_inicio", "")).strip()
+    ff_raw = str(row.get("Fecha_fin",    "")).strip()
+    is_full_year = (
+        fi_raw in ("nan", "01-01", "") and
+        ff_raw in ("nan", "12-31", "")
+    )
+    if not is_full_year and fi_raw and ff_raw and fi_raw != "nan" and ff_raw != "nan":
+        try:
+            fi_m, fi_d = map(int, fi_raw.split("-"))
+            ff_m, ff_d = map(int, ff_raw.split("-"))
+            fi_date = pd.Timestamp(yr, fi_m, fi_d)
+            # Cross-year: fin anterior a inicio (ej. oct→abr)
+            if (ff_m, ff_d) < (fi_m, fi_d):
+                ff_date = pd.Timestamp(yr + 1, ff_m, ff_d)
+            else:
+                ff_date = pd.Timestamp(yr, ff_m, ff_d)
+            return df_climate[
+                (df_climate["date"] >= fi_date) &
+                (df_climate["date"] <= ff_date)
+            ]
+        except Exception:
+            pass
+
+    # 3. Año completo
+    return df_climate[df_climate["year"] == yr]
 
 
 # ── Cálculo del valor del indicador ──────────────────────────────────────────
@@ -194,14 +262,12 @@ def _max_consecutive_run(mask: pd.Series) -> int:
     return max_run
 
 
-def _compute_annual_value(df_year: pd.DataFrame, row: pd.Series) -> float:
-    """Calcula el valor del indicador para un año dado."""
+def _compute_annual_value(df_climate: pd.DataFrame, row: pd.Series, yr: int) -> float:
+    """Calcula el valor del indicador para el año (o temporada) yr."""
     iid        = str(row.get("Indicador_id", "")).lower()
     conditions = _parse_conditions(row)
-    months     = _parse_months(row)
 
-    # Filtrar por meses relevantes
-    df_filt = df_year[df_year["month"].isin(months)] if months else df_year
+    df_filt = _filter_period(df_climate, row, yr)
 
     if df_filt.empty:
         return np.nan
@@ -217,7 +283,7 @@ def _compute_annual_value(df_year: pd.DataFrame, row: pd.Series) -> float:
         dry = (monthly_pr < thr)
         return float(_max_consecutive_run(dry))
 
-    # ── Calentamiento del suelo (DOY del primer día ≥ 5 cons. con Tavg > umbral) ──
+    # ── Calentamiento del suelo ───────────────────────────────────────
     if "soil_warming" in iid:
         thr = conditions[0][2] if conditions else 8.0
         cond = (df_filt["tavg"] > thr)
@@ -228,14 +294,14 @@ def _compute_annual_value(df_year: pd.DataFrame, row: pd.Series) -> float:
                 return float(df_filt["doy"].iloc[i - 4])
         return 180.0  # no alcanzado → riesgo alto
 
-    # ── Precipitación acumulada (con threshold para filtrar días) ─────
+    # ── Precipitación acumulada (con threshold) ───────────────────────
     if "cumulative" in iid:
         if conditions:
             mask = _day_mask(df_filt, conditions)
             return float(df_filt.loc[mask, "pr"].sum())
         return float(df_filt["pr"].sum())
 
-    # ── Construir máscara de días que cumplen la condición ────────────
+    # ── Construir máscara ─────────────────────────────────────────────
     if not conditions:
         return np.nan
     mask = _day_mask(df_filt, conditions)
@@ -263,8 +329,7 @@ def compute_risk_for_crop(
         score_medio, score_p80, score_max,
         riesgo_label, riesgo_color,
         umbrales (Sin_riesgo_0 … Riesgo_extremo_1),
-        Forma_curva, Definición,
-        Impacto_rendimiento_alto, Impacto_rendimiento_extremo
+        Forma_curva, Definición
     """
     indicators = get_indicators_for_crop(cultivo_app)
     if indicators.empty:
@@ -276,8 +341,7 @@ def compute_risk_for_crop(
     for _, row in indicators.iterrows():
         annual_vals = []
         for yr in years:
-            df_yr = df_climate[df_climate["year"] == yr]
-            val   = _compute_annual_value(df_yr, row)
+            val = _compute_annual_value(df_climate, row, yr)
             if not np.isnan(val):
                 annual_vals.append(val)
 
