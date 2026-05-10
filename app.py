@@ -1276,19 +1276,34 @@ with tab_validacion:
 
                 # ── Tabla de indicadores por categoría ───────────────
                 _EMOJI = {"verde": "🟢", "naranja": "🟡", "rojo": "🔴"}
-                _UNIT_ES = {"day": "días", "days": "días", "month": "meses", "months": "meses", "date": "día del año"}
+                _UNIT_ES = {"day": "días", "days": "días", "month": "meses", "months": "meses", "date": "fecha"}
+
+                def _doy_to_mmdd(doy: float) -> str:
+                    """Convierte día del año (float) a cadena MM/DD."""
+                    from datetime import date, timedelta
+                    try:
+                        d = date(2001, 1, 1) + timedelta(days=int(round(doy)) - 1)
+                        return d.strftime("%d/%m")
+                    except Exception:
+                        return str(round(doy))
+
                 for cat in df_risk["Categoría_riesgo"].unique():
                     df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
                     st.markdown(f"**{cat}**")
                     rows_disp = []
                     for _, r in df_cat.iterrows():
                         em = _EMOJI.get(r["riesgo_color"], "⚪")
+                        is_date = str(r["Unidad"]) == "date"
                         unidad = _UNIT_ES.get(str(r["Unidad"]), r["Unidad"])
+                        def _fmt(v):
+                            if v is None:
+                                return "—"
+                            return _doy_to_mmdd(v) if is_date else f"{v} {unidad}"
                         rows_disp.append({
                             "Riesgo": f"{em} {r['riesgo_label']}",
                             "Indicador": r["Nombre_indicador"],
-                            "Valor medio": f"{r['valor_medio']} {unidad}",
-                            "Valor P80":   f"{r['valor_p80']} {unidad}",
+                            "Valor medio": _fmt(r["valor_medio"]),
+                            "Valor P80":   _fmt(r["valor_p80"]),
                             "Score P80":   f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—",
                         })
                     st.dataframe(
@@ -1308,7 +1323,9 @@ with tab_validacion:
                               "Riesgo_medio_0.5", "Riesgo_alto_0.75",
                               "Riesgo_extremo_1", "Forma_curva"]
                 df_curva = df_risk[cols_curva].copy()
-                df_curva["Unidad"] = df_curva["Unidad"].map(lambda u: _UNIT_ES.get(str(u), u))
+                df_curva["Unidad"] = df_curva["Unidad"].map(
+                    lambda u: "fecha (DD/MM)" if str(u) == "date" else _UNIT_ES.get(str(u), u)
+                )
                 df_curva = df_curva.rename(columns={
                     "Nombre_indicador":  "Indicador",
                     "Sin_riesgo_0":      "Sin riesgo",
