@@ -130,5 +130,6 @@ def monthly_climatology(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-    monthly["pr_mean"] = monthly["pr_total"] / n_years
+    monthly["pr_mean"]  = monthly["pr_total"] / n_years
+    monthly["pr_days"]  = monthly["pr_days"]  / n_years
     return monthly

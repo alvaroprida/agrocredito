@@ -1218,7 +1218,7 @@ with tab_validacion:
                 fig_wd = px.bar(
                     x=MESES_ES, y=df_monthly["pr_days"].round(0),
                     labels={"x": "Mes", "y": "días"},
-                    title="Días con lluvia > 1 mm / mes",
+                    title="Media de días con lluvia > 1 mm / mes",
                     color_discrete_sequence=["#0ea5e9"],
                 )
                 fig_wd.update_layout(height=240, margin=dict(t=40, b=20))
