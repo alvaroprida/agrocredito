@@ -54,7 +54,7 @@ from utils.climate_data     import get_historical_climate, monthly_climatology
 from utils.risk_indicators  import (
     compute_risk_for_crop, crops_with_matrix,
     needed_extra_hourly,
-    score_to_label, score_to_color,
+    score_to_label, score_to_color, aggregate_risk_score,
 )
 from utils.eosda_terrain  import get_terrain_analysis
 from utils.eosda_ndvi     import get_ndvi_analysis
@@ -1268,16 +1268,18 @@ with tab_validacion:
                     "naranja": "🟠", "rojo":     "🔴",
                     "granate": "⛔", "gris":     "⚪",
                 }
-                _worst_score = df_risk["score_p80"].dropna().max() if "score_p80" in df_risk.columns else None
-                if _worst_score is not None:
-                    _gl = score_to_label(_worst_score)
-                    _gc = score_to_color(_worst_score)
+                _agg_score = aggregate_risk_score(df_risk)
+                if not np.isnan(_agg_score):
+                    _gl = score_to_label(_agg_score)
+                    _gc = score_to_color(_agg_score)
+                    _n_cat = df_risk["Categoría_riesgo"].nunique()
                     st.markdown(
                         f'<div style="background:{_COLOR_BG[_gc]};border-left:6px solid '
                         f'{_COLOR_BD[_gc]};padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
                         f'<b style="font-size:1.05rem">Riesgo agroclimático global: {_gl}</b>'
                         f'<span style="font-size:0.82rem;margin-left:1rem;color:#475569">'
-                        f'Score P80 máximo: {_worst_score:.2f}'
+                        f'Score agregado: {_agg_score:.2f} '
+                        f'(media del peor indicador por categoría · {_n_cat} categorías)'
                         f'</span></div>',
                         unsafe_allow_html=True,
                     )

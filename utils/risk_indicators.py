@@ -316,6 +316,24 @@ def _compute_annual_value(df_climate: pd.DataFrame, row: pd.Series, yr: int) -> 
     return float(mask.sum())
 
 
+# ── Agregación global ────────────────────────────────────────────────────────
+
+def aggregate_risk_score(df_risk: pd.DataFrame) -> float:
+    """
+    Score global: max score dentro de cada categoría de riesgo, luego media entre categorías.
+    Evita que categorías con muchos indicadores dominen el resultado.
+    Retorna float [0,1] o NaN si no hay datos.
+    """
+    cat_scores = (
+        df_risk.groupby("Categoría_riesgo")["score_p80"]
+        .max()
+        .dropna()
+    )
+    if cat_scores.empty:
+        return np.nan
+    return float(cat_scores.mean())
+
+
 # ── Función principal ─────────────────────────────────────────────────────────
 
 def compute_risk_for_crop(
