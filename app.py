@@ -53,6 +53,7 @@ from utils.infraestructura  import get_distancia_centro_urbano, get_distancia_vi
 from utils.climate_data     import get_historical_climate, monthly_climatology
 from utils.risk_indicators  import (
     compute_risk_for_crop, crops_with_matrix,
+    needed_extra_hourly,
     score_to_label, score_to_color,
 )
 from utils.eosda_terrain  import get_terrain_analysis
@@ -68,12 +69,14 @@ def _get_aptitud_cached(_gdf_predio, cultivo: str):
     return get_aptitud_api(_gdf_predio, cultivo)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_climate_cached(lat: float, lon: float):
-    return get_historical_climate(lat, lon, n_years=10)
+def _get_climate_cached(lat: float, lon: float, cultivo: str):
+    extra = needed_extra_hourly(cultivo)
+    return get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_risk_cached(lat: float, lon: float, cultivo: str):
-    df = get_historical_climate(lat, lon, n_years=10)
+    extra = needed_extra_hourly(cultivo)
+    df = get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
     return compute_risk_for_crop(df, cultivo)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1139,7 +1142,7 @@ with tab_validacion:
     _clima_ok = False
     try:
         with st.spinner("Descargando datos climáticos históricos (Open-Meteo ERA5) …"):
-            df_clima   = _get_climate_cached(c_lat, c_lon)
+            df_clima   = _get_climate_cached(c_lat, c_lon, cultivo)
             df_monthly = monthly_climatology(df_clima)
         _clima_ok = True
     except Exception as _e_clima:

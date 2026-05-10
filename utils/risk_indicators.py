@@ -35,6 +35,23 @@ def get_indicators_for_crop(cultivo_app: str) -> pd.DataFrame:
     return df[df["Cultivo_app"] == cultivo_app].reset_index(drop=True)
 
 
+def needed_extra_hourly(cultivo_app: str) -> list[str]:
+    """
+    Retorna las variables horarias adicionales (más allá de rh_mean) que necesitan
+    los indicadores del cultivo. Evita descargar datos innecesarios.
+    """
+    df = get_indicators_for_crop(cultivo_app)
+    extras = set()
+    for _, row in df.iterrows():
+        for var, _, _ in _parse_conditions(row):
+            col = _VAR_MAP.get(var)
+            if col == "sm_0_7":
+                extras.add("soil_moisture_0_to_7cm")
+            elif col == "ws_10m":
+                extras.add("wind_speed_10m")
+    return list(extras)
+
+
 def crops_with_matrix() -> list[str]:
     """Lista de cultivos con matriz disponible (nombres del desplegable de la app)."""
     df = _get_matrix()
