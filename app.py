@@ -1272,21 +1272,12 @@ with tab_validacion:
                 if _worst_score is not None:
                     _gl = score_to_label(_worst_score)
                     _gc = score_to_color(_worst_score)
-                    _n_granate  = (df_risk["riesgo_color"] == "granate").sum()
-                    _n_rojo     = (df_risk["riesgo_color"] == "rojo").sum()
-                    _n_naranja  = (df_risk["riesgo_color"] == "naranja").sum()
-                    _n_amarillo = (df_risk["riesgo_color"] == "amarillo").sum()
-                    _n_verde    = (df_risk["riesgo_color"] == "verde").sum()
                     st.markdown(
                         f'<div style="background:{_COLOR_BG[_gc]};border-left:6px solid '
                         f'{_COLOR_BD[_gc]};padding:0.8rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
-                        f'<b style="font-size:1.05rem">Riesgo global: {_gl}</b>'
-                        f'<span style="font-size:0.82rem;margin-left:1rem">'
-                        f'⛔ {_n_granate} extremo · '
-                        f'🔴 {_n_rojo} alto · '
-                        f'🟠 {_n_naranja} medio · '
-                        f'🟡 {_n_amarillo} bajo · '
-                        f'🟢 {_n_verde} sin riesgo'
+                        f'<b style="font-size:1.05rem">Riesgo agroclimático global: {_gl}</b>'
+                        f'<span style="font-size:0.82rem;margin-left:1rem;color:#475569">'
+                        f'Score P80 máximo: {_worst_score:.2f}'
                         f'</span></div>',
                         unsafe_allow_html=True,
                     )
@@ -1296,7 +1287,7 @@ with tab_validacion:
                 _ROW_BG = {
                     "verde":   "#d1fae5", "amarillo": "#dcfce7",
                     "naranja": "#fef9c3", "rojo":     "#fed7aa",
-                    "granate": "#fca5a5", "gris":     "#f8fafc",
+                    "granate": "#fee2e2", "gris":     "#f8fafc",
                 }
                 _LABEL_COLOR = {
                     "verde":   "#166534", "amarillo": "#166534",
@@ -1330,7 +1321,7 @@ with tab_validacion:
                         rows_html += (
                             f'<tr style="background:{bg}">'
                             f'<td style="padding:5px 8px;color:{fg};font-weight:600;white-space:nowrap">'
-                            f'{em} {r["riesgo_label"]}</td>'
+                            f'{r["riesgo_label"]}</td>'
                             f'<td style="padding:5px 8px">{r["Nombre_indicador"]}</td>'
                             f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_medio"])}</td>'
                             f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_p80"])}</td>'
@@ -1374,41 +1365,11 @@ with tab_validacion:
                     "Forma_curva":       "Curva",
                 })
                 st.dataframe(df_curva, use_container_width=True, hide_index=True)
-
-                st.markdown("""
-<table style="width:100%;border-collapse:collapse;font-size:0.80rem;margin-top:0.6rem">
-<thead><tr style="background:#f1f5f9;text-align:center;font-weight:600">
-  <td style="padding:5px 10px">Score</td>
-  <td style="padding:5px 10px">Rango</td>
-  <td style="padding:5px 10px">Etiqueta</td>
-  <td style="padding:5px 10px">Criterio de clasificación</td>
-</tr></thead>
-<tr style="background:#d1fae5;text-align:center">
-  <td style="padding:5px 8px">0.00</td><td>= 0.00</td>
-  <td><b>Sin riesgo</b></td><td>Valor del indicador por debajo del umbral de riesgo</td>
-</tr>
-<tr style="background:#dcfce7;text-align:center">
-  <td style="padding:5px 8px">0.25</td><td>(0.00 – 0.25]</td>
-  <td><b>Riesgo bajo</b></td><td>Estrés incipiente, impacto en rendimiento marginal</td>
-</tr>
-<tr style="background:#fef9c3;text-align:center">
-  <td style="padding:5px 8px">0.50</td><td>(0.25 – 0.50]</td>
-  <td><b>Riesgo medio</b></td><td>Estrés moderado, pérdidas de rendimiento probables</td>
-</tr>
-<tr style="background:#fed7aa;text-align:center">
-  <td style="padding:5px 8px">0.75</td><td>(0.50 – 0.75]</td>
-  <td><b>Riesgo alto</b></td><td>Estrés severo, pérdidas significativas esperadas</td>
-</tr>
-<tr style="background:#fee2e2;text-align:center">
-  <td style="padding:5px 8px">1.00</td><td>(0.75 – 1.00]</td>
-  <td><b>Riesgo extremo</b></td><td>Umbral crítico superado, pérdidas graves o irrecuperables</td>
-</tr>
-</table>
-<p style="font-size:0.73rem;color:#64748b;margin-top:4px">
-  El score se interpola de forma lineal entre los umbrales del Excel.
-  Se usa el <b>percentil 80 anual</b> (escenario adverso 1 de cada 5 años) para la clasificación.
-</p>
-""", unsafe_allow_html=True)
+                st.caption(
+                    "Score interpolado linealmente entre umbrales. "
+                    "Se usa el percentil 80 anual (escenario adverso 1 de cada 5 años). "
+                    "Colores: sin riesgo · bajo · medio · alto · extremo."
+                )
 
 
     # ════════════════════════════════════════════════════════════════════
