@@ -1307,180 +1307,41 @@ with tab_validacion:
                 })
                 st.dataframe(df_curva, use_container_width=True, hide_index=True)
 
-    # ── D3/D4 · Scoring legacy (umbrales manuales) ───────────────────
-    with st.expander("⚙️ D3 · Matriz de Vulnerabilidad — Umbrales por Indicador", expanded=True):
-        st.caption(
-            "Los umbrales definen los niveles **Sin riesgo / Bajo / Medio / Alto / Extremo** "
-            "para cada indicador. Selecciona el cultivo para cargar los valores predefinidos, "
-            "o edítalos directamente en la tabla."
-        )
+                st.markdown("""
+<table style="width:100%;border-collapse:collapse;font-size:0.80rem;margin-top:0.6rem">
+<thead><tr style="background:#f1f5f9;text-align:center;font-weight:600">
+  <td style="padding:5px 10px">Score</td>
+  <td style="padding:5px 10px">Rango</td>
+  <td style="padding:5px 10px">Etiqueta</td>
+  <td style="padding:5px 10px">Criterio de clasificación</td>
+</tr></thead>
+<tr style="background:#d1fae5;text-align:center">
+  <td style="padding:5px 8px">0.00</td><td>= 0.00</td>
+  <td><b>Sin riesgo</b></td><td>Valor del indicador por debajo del umbral de riesgo</td>
+</tr>
+<tr style="background:#dcfce7;text-align:center">
+  <td style="padding:5px 8px">0.25</td><td>(0.00 – 0.25]</td>
+  <td><b>Riesgo bajo</b></td><td>Estrés incipiente, impacto en rendimiento marginal</td>
+</tr>
+<tr style="background:#fef9c3;text-align:center">
+  <td style="padding:5px 8px">0.50</td><td>(0.25 – 0.50]</td>
+  <td><b>Riesgo medio</b></td><td>Estrés moderado, pérdidas de rendimiento probables</td>
+</tr>
+<tr style="background:#fed7aa;text-align:center">
+  <td style="padding:5px 8px">0.75</td><td>(0.50 – 0.75]</td>
+  <td><b>Riesgo alto</b></td><td>Estrés severo, pérdidas significativas esperadas</td>
+</tr>
+<tr style="background:#fee2e2;text-align:center">
+  <td style="padding:5px 8px">1.00</td><td>(0.75 – 1.00]</td>
+  <td><b>Riesgo extremo</b></td><td>Umbral crítico superado, pérdidas graves o irrecuperables</td>
+</tr>
+</table>
+<p style="font-size:0.73rem;color:#64748b;margin-top:4px">
+  El score se interpola de forma lineal entre los umbrales del Excel.
+  Se usa el <b>percentil 80 anual</b> (escenario adverso 1 de cada 5 años) para la clasificación.
+</p>
+""", unsafe_allow_html=True)
 
-        col_cult, col_reset = st.columns([2,1])
-        with col_cult:
-            _umb_opts = list(UMBRALES_5.keys())   # sólo cultivos con umbrales definidos
-            _umb_default = cultivo.lower() if cultivo.lower() in _umb_opts else _umb_opts[0]
-            cultivo_umb = st.selectbox(
-                "Cultivo para umbrales predefinidos",
-                _umb_opts,
-                index=_umb_opts.index(_umb_default),
-                key="cultivo_umbrales",
-            )
-        with col_reset:
-            st.markdown("<div style='margin-top:1.8rem'>", unsafe_allow_html=True)
-            reset_umb = st.button("🔄 Restablecer predefinidos", key="reset_umbrales")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        # Inicializar o restablecer umbrales en session_state
-        if reset_umb or "umbrales_edit" not in st.session_state:
-            st.session_state["umbrales_edit"] = {
-                iid: list(vals)
-                for iid, vals in UMBRALES_5[cultivo_umb].items()
-            }
-
-        # Construir DataFrame para el editor
-        umb_rows = []
-        for ind in INDICADORES:
-            iid = ind["id"]
-            u   = st.session_state["umbrales_edit"].get(iid, UMBRALES_5["café"][iid])
-            umb_rows.append({
-                "ID":           iid,
-                "Grupo":        ind["grupo"],
-                "Indicador":    ind["nombre"],
-                "Unidad":       ind["unidad"],
-                "Sin riesgo <": u[0],
-                "Bajo <":       u[1],
-                "Medio <":      u[2],
-                "Alto <":       u[3],
-                "Extremo ≥":    u[3],   # informativo, = Alto
-                "Fuente":       ind["fuente"],
-                "API":          "✅" if ind["api"] else "⚠️ Estático",
-                "Estado":       "⏳ pendiente" if ind["pendiente"] else "✅ activo",
-            })
-
-        df_umb = pd.DataFrame(umb_rows)
-        df_edit = st.data_editor(
-            df_umb[["ID","Grupo","Indicador","Unidad",
-                    "Sin riesgo <","Bajo <","Medio <","Alto <",
-                    "Fuente","API","Estado"]],
-            use_container_width=True, hide_index=True,
-            disabled=["ID","Grupo","Indicador","Unidad","Fuente","API","Estado"],
-            key="editor_umbrales",
-        )
-
-        # Sincronizar edits al session_state
-        for _, row in df_edit.iterrows():
-            iid = int(row["ID"])
-            st.session_state["umbrales_edit"][iid] = [
-                row["Sin riesgo <"], row["Bajo <"],
-                row["Medio <"],      row["Alto <"],
-                row["Alto <"],  # extremo = umbral alto (misma cota superior)
-            ]
-
-        # Leyenda visual de niveles
-        st.markdown(
-            '<div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap">'
-            + "".join([
-                f'<div style="background:{SCORE_5_COLOR[i]};color:{SCORE_5_TEXT[i]};'
-                f'padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:600">'
-                f'{SCORE_5_LABEL[i]}</div>'
-                for i in range(5)
-            ])
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-
-    with st.expander("🎯 D4 · Resultados del Scoring (manual)", expanded=True):
-        if st.button("🔍 Calcular scoring de riesgo", type="primary",
-                     use_container_width=True, key="btn_scoring"):
-            umbrales_final = st.session_state.get("umbrales_edit",
-                                                   UMBRALES_5.get(cultivo, UMBRALES_5["café"]))
-            scoring = calcular_scoring_5(d, umbrales_final)
-            st.session_state["scoring"] = scoring
-
-        scoring = st.session_state.get("scoring")
-
-        if scoring is None:
-            st.info("Pulsa **Calcular scoring de riesgo** para ver los resultados.")
-        else:
-            sg = scoring["score_global"]
-
-            # Banner global
-            st.markdown(
-                f'<div style="background:{SCORE_5_COLOR[sg]};border-left:6px solid '
-                f'{SCORE_5_TEXT[sg]};padding:0.9rem 1.2rem;border-radius:6px;margin-bottom:1rem">'
-                f'<b style="font-size:1.1rem;color:{SCORE_5_TEXT[sg]}">'
-                f'Riesgo global: {SCORE_5_LABEL[sg]}</b>'
-                f'<span style="font-size:0.82rem;color:{SCORE_5_TEXT[sg]};margin-left:1rem">'
-                f'🚨 {scoring["n_extremo"]} extremo · '
-                f'🔴 {scoring["n_alto"]} alto · '
-                f'🟡 {scoring["n_medio"]} medio · '
-                f'🟢 {scoring["n_bajo"]} bajo · '
-                f'🟢 {scoring["n_sin"]} sin riesgo'
-                f'</span></div>',
-                unsafe_allow_html=True,
-            )
-
-            # Scores por grupo
-            cols_g = st.columns(len(GRUPOS))
-            for col_g, grupo in zip(cols_g, GRUPOS):
-                sc_g = scoring["por_grupo"][grupo]
-                col_g.markdown(
-                    f'<div style="background:{SCORE_5_COLOR[sc_g]};'
-                    f'border:1px solid {SCORE_5_TEXT[sc_g]};border-radius:6px;'
-                    f'padding:0.5rem 0.3rem;text-align:center;margin:2px">'
-                    f'<div style="font-size:0.65rem;color:{SCORE_5_TEXT[sc_g]};'
-                    f'font-weight:600;line-height:1.3">{grupo}</div>'
-                    f'<div style="font-size:0.88rem;font-weight:700;'
-                    f'color:{SCORE_5_TEXT[sc_g]}">{SCORE_5_LABEL[sc_g]}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-            st.markdown("")
-
-            # Tabla detallada por grupo
-            for grupo in GRUPOS:
-                filas = [r for r in scoring["resultados"] if r["grupo"]==grupo]
-                if not filas: continue
-                sc_g = scoring["por_grupo"][grupo]
-                st.markdown(
-                    f'<div style="background:{SCORE_5_COLOR[sc_g]};border-left:4px solid '
-                    f'{SCORE_5_TEXT[sc_g]};padding:4px 10px;border-radius:4px;'
-                    f'margin:6px 0 3px 0">'
-                    f'<b style="color:{SCORE_5_TEXT[sc_g]}">{grupo}</b>'
-                    f'<span style="font-size:0.8rem;margin-left:8px;color:{SCORE_5_TEXT[sc_g]}">'
-                    f'{SCORE_5_LABEL[sc_g]}</span></div>',
-                    unsafe_allow_html=True,
-                )
-                rows_t = []
-                for r in filas:
-                    estado_tag = "⏳ pendiente" if r["pendiente"] else "✅"
-                    rows_t.append({
-                        "#":        r["id"],
-                        "Indicador":r["nombre"],
-                        "Valor":    r["valor"],
-                        "Unidad":   r["unidad"],
-                        "Score":    r["label"],
-                        "Decisión": r["decision"],
-                        "Fuente":   r["fuente"],
-                        "Estado":   estado_tag,
-                        "_sc":      r["score"],
-                    })
-                df_res = pd.DataFrame(rows_t)
-
-                df_display = df_res.drop(columns=["_sc"])
-                score_map  = {i: r["score"] for i, r in enumerate(filas)}
-
-                def _color_row(row):
-                    sc = score_map.get(row.name, 0)
-                    return [f"background-color:{SCORE_5_COLOR[sc]}" if col=="Score" else ""
-                            for col in row.index]
-
-                st.dataframe(
-                    df_display.style.apply(_color_row, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-                st.markdown("")
 
     # ════════════════════════════════════════════════════════════════════
     #  RESUMEN VALIDACIÓN PRE-CRÉDITO
