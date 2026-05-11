@@ -499,10 +499,11 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════════════════
 #  TABS  (3 tabs — Riesgo fusionado en Validación)
 # ══════════════════════════════════════════════════════════════════════════════
-tab_inicio, tab_validacion, tab_monitoreo = st.tabs([
+tab_inicio, tab_validacion, tab_monitoreo, tab_metodologia = st.tabs([
     "🏠 Inicio · Ingreso del Predio",
     "✅ Validación Pre-Crédito",
     "📡 Monitoreo & Forecast",
+    "📖 Metodología",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1082,62 +1083,7 @@ with tab_validacion:
             df_ts    = pd.DataFrame(b2["stats"]).sort_values("date")
             n_scenes = len(df_ts)
 
-            # ── Metodología ──────────────────────────────────────────────
-            with st.expander("ℹ️ Metodología y criterios de evaluación", expanded=False):
-                st.markdown(f"""
-**Fuente de datos**
-Imágenes Sentinel-2 descargadas vía EOSDA Field Analytics API.
-Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro por AOI, no por tile).
-Período analizado: últimos 3 años (~{n_scenes} escenas válidas).
-
----
-
-**Umbrales para *{cultivo}***
-
-| Indicador | Umbral aplicado |
-|-----------|----------------|
-| NDVI mínimo por escena (actividad vegetativa) | **≥ {s_thr:.2f}** |
-| Pico NDVI anual (actividad estacional confirmada) | **≥ {p_thr:.2f}** |
-
-Los umbrales varían por cultivo: cultivos de hoja densa (plátano, aguacate) tienen
-umbral más alto que cultivos de ciclo corto (papa, cebolla).
-
----
-
-**Indicadores y lógica del semáforo**
-
-*Indicador 1 · % de escenas activas*
-De todas las escenas válidas del período, se calcula qué fracción tiene un NDVI mediano ≥ {s_thr:.2f}.
-Un valor alto indica que el predio ha mantenido vegetación activa de forma continuada.
-
-| Resultado | Semáforo |
-|-----------|----------|
-| ≥ 40 % de escenas activas | 🟢 Verde |
-| 20 – 40 % | 🟡 Amarillo |
-| < 20 % | 🔴 Rojo |
-
-*Indicador 2 · Pico NDVI anual*
-Para cada año del período se identifica la escena con mayor NDVI.
-Si ese pico supera {p_thr:.2f} se considera que ese año tuvo actividad productiva real.
-
-| Resultado | Semáforo |
-|-----------|----------|
-| Pico ≥ {p_thr:.2f} en **todos** los años | 🟢 Verde |
-| Pico ≥ {p_thr:.2f} en todos menos uno | 🟡 Amarillo |
-| Pico ≥ {p_thr:.2f} en menos de la mitad | 🔴 Rojo |
-
-**Semáforo final**: el peor de los dos indicadores.
-
----
-
-**Decisión recomendada por color**
-
-| Color | Criterio | Acción recomendada |
-|-------|----------|--------------------|
-| 🟢 Verde | Ambos indicadores confirmados | Sin restricción adicional |
-| 🟡 Amarillo | Al menos un indicador parcial | Solicitar documentación (facturas, registros ICA, certificaciones de cosecha) |
-| 🔴 Rojo | Actividad no confirmada | Inspección técnica presencial antes de aprobación |
-""")
+            st.caption("ℹ️ Fuentes de datos, hipótesis y tablas de decisión en la tab **📖 Metodología**.")
 
             # ── KPIs ─────────────────────────────────────────────────────
             c1,c2,c3,c4 = st.columns(4)
@@ -1638,43 +1584,103 @@ Si ese pico supera {p_thr:.2f} se considera que ese año tuvo actividad producti
     # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 📋 Resumen de Validación Pre-Crédito")
+    st.caption("Semáforo global por indicador · Ver criterios detallados en la tab **📖 Metodología**.")
 
-    scoring      = st.session_state.get("scoring")
-    gdf_frontera = st.session_state.get("gdf_frontera")
-    gdf_aptitud  = st.session_state.get("gdf_aptitud")
-    gdf_vp       = st.session_state.get("gdf_valor_potencial")
-    ndvi_ok      = MOCK_NDVI["ndvi_promedio"] >= MOCK_NDVI["umbral_ndvi"]
+    _SEM_BG  = {"verde":"#d1fae5","amarillo":"#fef9c3","naranja":"#fef3c7","rojo":"#fee2e2","gris":"#f1f5f9"}
+    _SEM_BD  = {"verde":"#059669","amarillo":"#ca8a04","naranja":"#d97706","rojo":"#dc2626","gris":"#94a3b8"}
+    _SEM_TX  = {"verde":"#065f46","amarillo":"#713f12","naranja":"#713f12","rojo":"#7f1d1d","gris":"#475569"}
+    _SEM_EM  = {"verde":"🟢","amarillo":"🟡","naranja":"🟡","rojo":"🔴","gris":"⚪"}
+    _SEM_ACT = {
+        "verde":    "Sin restricción",
+        "amarillo": "Documentación adicional recomendada",
+        "naranja":  "Documentación adicional recomendada",
+        "rojo":     "Inspección técnica / verificación presencial",
+        "gris":     "Pendiente de cálculo",
+    }
 
-    sg_label  = scoring["label_global"] if scoring else "— (ejecuta scoring D)"
-    sg_estado = ("✅" if scoring and scoring["score_global"]<=1
-                 else "⚠️" if scoring and scoring["score_global"]==2
-                 else "🔴" if scoring and scoring["score_global"]>=3
-                 else "—")
+    # ── Collect semáforos ─────────────────────────────────────────────
+    _gdf_front = st.session_state.get("gdf_frontera")
+    _apt_res   = apt_result if "apt_result" in dir() else None
 
-    resumen = pd.DataFrame({
-        "Marco": [
-            "A · Frontera agrícola",
-            "A · Área efectiva cultivable",
-            "B · Aptitud al cultivo",
-            "B · Valor potencial del suelo",
-            "B · Actividad productiva (NDVI)",
-            "C · Infraestructura",
-            "D · Riesgo agroclimático",
-        ],
-        "Resultado": [
-            ", ".join(gdf_frontera["tipo_condi"].unique()) if gdf_frontera is not None and len(gdf_frontera)>0 else "—",
-            f"{area_ef} ha ({pct_ef}%)",
-            ", ".join(gdf_aptitud["aptitud"].unique()) if gdf_aptitud is not None and len(gdf_aptitud)>0 else "—",
-            ", ".join(str(x) for x in gdf_vp["clase_ufh"].unique()) if gdf_vp is not None and len(gdf_vp)>0 else "—",
-            "✅ Activa" if ndvi_ok else "⚠️ Por verificar",
-            d["construcciones_desc"],
-            sg_label,
-        ],
-        "Estado": ["✅","✅","✅","✅",
-                   "✅" if ndvi_ok else "⚠️",
-                   "✅", sg_estado],
-    })
-    st.dataframe(resumen, use_container_width=True, hide_index=True)
+    _sem_a1 = ("verde"
+               if _gdf_front is not None and len(_gdf_front) > 0 and
+                  all("condicionada" not in t.lower() and "protegida" not in t.lower()
+                      for t in _gdf_front["tipo_condi"].unique())
+               else "naranja" if _gdf_front is not None and len(_gdf_front) > 0
+               else "gris")
+    _res_a1 = (", ".join(_gdf_front["tipo_condi"].unique())
+               if _gdf_front is not None and len(_gdf_front) > 0 else "—")
+
+    _sem_a2 = "verde" if pct_ef >= 70 else "amarillo" if pct_ef >= 40 else "rojo"
+    _res_a2 = f"{area_ef} ha ({pct_ef:.0f}% del predio)"
+
+    _apt_cat   = (_apt_res.get("category") if _apt_res and not _apt_res.get("error") else None)
+    _apt_score = (_apt_res.get("score")    if _apt_res and not _apt_res.get("error") else None)
+    _sem_b1 = ("verde" if _apt_cat == "Alta" else "amarillo" if _apt_cat == "Media"
+               else "rojo" if _apt_cat in ("Baja","No apta") else "gris")
+    _res_b1 = (f"{_apt_cat} (score {_apt_score:.2f})" if _apt_cat else "—")
+
+    _b2_sum = st.session_state.get("b2_result")
+    _sem_b2 = (_b2_sum["semaforo"] if _b2_sum else "gris")
+    _b2_sem_map = {"verde":"verde","amarillo":"amarillo","rojo":"rojo"}
+    _sem_b2 = _b2_sem_map.get(_sem_b2, "gris")
+    _res_b2 = (f"{_b2_sum['pct_active']:.0f}% escenas activas · "
+               f"{_b2_sum['years_with_peak']}/{_b2_sum['n_years']} años con pico"
+               if _b2_sum else "—")
+
+    _sem_c = _color_global          # computed in C section
+    _res_c = _detalle_global
+
+    _sem_d, _res_d = "gris", "—"
+    if _clima_ok and _cultivo_tiene_matriz:
+        try:
+            _d_risk = _get_risk_cached(c_lat, c_lon, cultivo, mtime=_matrix_mtime())
+            if not _d_risk.empty:
+                _d_agg = aggregate_risk_score(_d_risk)
+                if not np.isnan(_d_agg):
+                    _d_lbl = score_to_label(_d_agg)
+                    _d_col = score_to_color(_d_agg)
+                    _sem_d = ("verde" if _d_col in ("verde","amarillo") else
+                              "naranja" if _d_col == "naranja" else "rojo")
+                    _res_d = f"{_d_lbl} (score P80: {_d_agg:.2f})"
+        except Exception:
+            pass
+
+    # ── Render table ──────────────────────────────────────────────────
+    _summary_rows = [
+        ("A1", "Zona Agrícola · Frontera", "PostGIS / IGAC",          _sem_a1, _res_a1),
+        ("A2", "Área Efectiva Cultivable",  "DEM · NDVI · Catastro",   _sem_a2, _res_a2),
+        ("B1", "Aptitud al Cultivo",        "UPRA · datos.gov.co",     _sem_b1, _res_b1),
+        ("B2", "Actividad Productiva NDVI", "EOSDA · Sentinel-2",      _sem_b2, _res_b2),
+        ("C",  "Infraestructura / Acceso",  "OSM · OSRM",              _sem_c,  _res_c),
+        ("D",  "Riesgo Agroclimático",      "ERA5 · Open-Meteo · P80", _sem_d,  _res_d),
+    ]
+    _tbl_rows = ""
+    for _code, _name, _src, _sem, _res in _summary_rows:
+        _bg  = _SEM_BG[_sem]; _bd = _SEM_BD[_sem]; _tx = _SEM_TX[_sem]
+        _em  = _SEM_EM[_sem]; _ac = _SEM_ACT[_sem]
+        _tbl_rows += (
+            f'<tr style="background:{_bg}">'
+            f'<td style="padding:6px 10px;font-weight:700;color:{_tx};white-space:nowrap">{_code}</td>'
+            f'<td style="padding:6px 10px;font-weight:600;color:{_tx}">{_name}</td>'
+            f'<td style="padding:6px 10px;color:#475569;font-size:0.80rem">{_src}</td>'
+            f'<td style="padding:6px 10px;text-align:center;font-size:1.1rem">{_em}</td>'
+            f'<td style="padding:6px 10px;color:{_tx};font-size:0.83rem">{_res}</td>'
+            f'<td style="padding:6px 10px;color:{_tx};font-size:0.80rem;font-style:italic">{_ac}</td>'
+            f'</tr>'
+        )
+    st.markdown(
+        '<table style="width:100%;border-collapse:collapse;font-size:0.84rem">'
+        '<thead><tr style="background:#f1f5f9;font-weight:600;text-align:left">'
+        '<td style="padding:6px 10px">Bloque</td>'
+        '<td style="padding:6px 10px">Indicador</td>'
+        '<td style="padding:6px 10px">Fuente</td>'
+        '<td style="padding:6px 10px;text-align:center">Score</td>'
+        '<td style="padding:6px 10px">Resultado</td>'
+        '<td style="padding:6px 10px">Acción recomendada</td>'
+        f'</tr></thead><tbody>{_tbl_rows}</tbody></table>',
+        unsafe_allow_html=True,
+    )
 
     # ════════════════════════════════════════════════════════════════════
     #  PDF
@@ -1771,3 +1777,293 @@ with tab_monitoreo:
 
     st.info("**Próximas funcionalidades:** Alertas automáticas · "
             "Umbrales por fase fenológica · Reporte de monitoreo PDF.", icon="🔜")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TAB 3 · METODOLOGÍA
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_metodologia:
+    _cult_m  = st.session_state.get("cultivo", "Café").lower().split("(")[0].strip()
+    _b2_m    = st.session_state.get("b2_result")
+    _thr_s   = f"{_b2_m['scene_threshold']:.2f}" if _b2_m else "0.35–0.50*"
+    _thr_p   = f"{_b2_m['peak_threshold']:.2f}"  if _b2_m else "0.45–0.60*"
+    _ndvi_th = st.session_state.get("ndvi_threshold", 0.25)
+
+    st.subheader("📖 Metodología y Criterios de Evaluación")
+    st.caption(
+        "Fuentes de datos, hipótesis, umbrales y tablas de decisión para cada bloque de la validación. "
+        "Los campos marcados con * varían según el cultivo seleccionado."
+    )
+
+    # ─── A · VALIDACIÓN GEOMÉTRICA Y LEGAL ───────────────────────────────────
+    with st.expander("📐 A · Validación Geométrica y Legal", expanded=True):
+
+        st.markdown("#### 🌿 A1 · Zona Agrícola — Frontera Agrícola Nacional")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Fuente de datos**
+Base de Frontera Agrícola Nacional (UPRA / IGAC) almacenada en PostGIS.
+La geometría del predio se intersecta con las capas de frontera para determinar
+en qué tipo de zona se ubica el suelo.
+
+**Hipótesis**
+Un predio dentro de la frontera agrícola estricta tiene menor riesgo de
+restricciones ambientales o legales que afecten la recuperación del crédito.
+Zonas condicionadas o excluidas aumentan el riesgo de incumplimiento o expropiación.
+""")
+        with c2:
+            st.markdown("""
+**Tabla de decisión**
+
+| Zona | Semáforo | Acción recomendada |
+|------|----------|--------------------|
+| Frontera agrícola | 🟢 Verde | Sin restricción |
+| Frontera agrícola condicionada | 🟡 Amarillo | Verificar condicionante; solicitar plan de manejo ambiental |
+| Área protegida / excluida | 🔴 Rojo | No procede el crédito sin autorización ambiental expresa |
+""")
+
+        st.markdown("---")
+        st.markdown("#### 📏 A2 · Área Efectiva Cultivable")
+        st.markdown("""
+El área efectiva es el área total del predio menos la superficie no cultivable por tres fuentes de exclusión.
+Cuando A2-A (pendiente) y A2-C (NDVI) están calculados, se hace la **unión exacta píxel a píxel**,
+evitando el doble conteo de zonas que coinciden en múltiples capas.
+""")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"""
+**A2-A · Pendiente (DEM)**
+
+- Fuente: EOSDA API — DEM SRTM 30 m
+- Umbral configurable (default **25 %**)
+- Se excluyen los píxeles con pendiente superior al umbral
+
+| Pendiente | Clasificación |
+|-----------|--------------|
+| < umbral  | Cultivable   |
+| ≥ umbral  | Excluida     |
+""")
+        with c2:
+            st.markdown(f"""
+**A2-C · NDVI histórico (Sentinel-2)**
+
+- Fuente: Sentinel-2 L2A COG · Element84 Earth Search (sin API key)
+- Período: últimos **3 años**; filtro nubosidad SCL < 20 % dentro del predio
+- Estadístico: **P25 por píxel** — percentil 25 de todas las escenas válidas
+- Umbral actual: P25 ≥ **{_ndvi_th:.2f}** → productivo
+
+| NDVI P25 | Clasificación |
+|----------|--------------|
+| ≥ {_ndvi_th:.2f} | Productivo |
+| < {_ndvi_th:.2f} | Excluida del área efectiva |
+""")
+        with c3:
+            st.markdown("""
+**A2-B · Construcciones (Catastro)**
+
+- Fuente: IGAC · catastro nacional (PostGIS)
+- Las construcciones registradas se excluyen del área productiva
+- Se integran en la unión de máscaras para evitar solapamiento
+
+**Nota**: si la base catastral no tiene construcciones registradas, el área construida se suma directamente como exclusión sin rasterizar.
+""")
+        st.markdown(f"""
+**Semáforo de Área Efectiva**
+
+| % Área efectiva / Total | Semáforo | Acción recomendada |
+|-------------------------|----------|--------------------|
+| ≥ 70 % | 🟢 Verde | Sin restricción |
+| 40 – 70 % | 🟡 Amarillo | Revisar estructura de costos del proyecto; área disponible puede limitar el volumen de producción |
+| < 40 % | 🔴 Rojo | Viabilidad productiva comprometida; solicitar plan de uso alternativo del suelo |
+""")
+
+    # ─── B · CONTINUIDAD PRODUCTIVA ───────────────────────────────────────────
+    with st.expander("🌱 B · Continuidad Productiva", expanded=True):
+
+        st.markdown("#### 🌾 B1 · Aptitud al Cultivo")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+API de zonificación de aptitud por cultivo de la UPRA (datos.gov.co).
+Disponible para: café, cacao, aguacate, plátano, cebolla y otros cultivos priorizados.
+
+**Metodología**
+La intersección geométrica del predio con las zonas de aptitud genera un
+**score ponderado por área**:
+
+| Clase de aptitud | Peso |
+|-----------------|------|
+| Alta    | 1.00 |
+| Media   | 0.67 |
+| Baja    | 0.33 |
+| No apta | 0.00 |
+
+Score = Σ (área_clase × peso_clase) / área_total
+""")
+        with c2:
+            st.markdown(f"""
+**Hipótesis**
+Un predio con alta aptitud agrológica para el cultivo declarado tiene
+menor riesgo de pérdida de rendimiento por factores edáficos o climáticos
+estructurales, lo que mejora la capacidad de repago del crédito.
+
+**Tabla de decisión**
+
+| Score ponderado | Categoría | Semáforo | Acción |
+|----------------|-----------|----------|--------|
+| ≥ 0.70 | Alta    | 🟢 Verde    | Sin restricción |
+| 0.40 – 0.69 | Media | 🟡 Amarillo | Documentar plan de manejo agrícola |
+| < 0.40 | Baja / No apta | 🔴 Rojo | Evaluar viabilidad técnica del proyecto |
+""")
+
+        st.markdown("---")
+        st.markdown("#### 📊 B2 · Actividad Productiva (NDVI histórico)")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+Sentinel-2 L2A · EOSDA Field Analytics API.
+Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro AOI, no por tile completo).
+Período: últimos **3 años**, 3 peticiones en paralelo de 1 año cada una.
+
+**Hipótesis**
+Un predio productivo activo debería mostrar de forma recurrente valores
+de NDVI por encima del umbral fenológico del cultivo. La persistencia anual
+del pico máximo confirma que ha habido al menos un ciclo productivo por año.
+
+**Umbrales para *{_cult_m}*** *(calculados al ejecutar el análisis)*
+
+| Parámetro | Umbral aplicado |
+|-----------|----------------|
+| NDVI mínimo por escena (actividad activa) | ≥ {_thr_s} |
+| Pico NDVI anual (actividad estacional confirmada) | ≥ {_thr_p} |
+
+*Los umbrales varían por cultivo: hoja densa (plátano, aguacate) → mayor umbral;
+ciclo corto (papa, cebolla) → menor umbral.*
+""")
+        with c2:
+            st.markdown(f"""
+**Indicador 1 · % de escenas activas** (NDVI mediano ≥ {_thr_s})
+
+De todas las escenas del período, ¿qué fracción supera el umbral mínimo?
+Un valor alto indica vegetación activa recurrente.
+
+| % escenas activas | Semáforo |
+|-------------------|----------|
+| ≥ 40 %    | 🟢 Verde    |
+| 20 – 40 % | 🟡 Amarillo |
+| < 20 %    | 🔴 Rojo     |
+
+**Indicador 2 · Pico anual** (máximo NDVI del año ≥ {_thr_p})
+
+¿En cuántos años del período se registró al menos un pico productivo?
+
+| Años con pico | Semáforo |
+|---------------|----------|
+| Todos los años | 🟢 Verde    |
+| Todos menos 1  | 🟡 Amarillo |
+| < mitad de años | 🔴 Rojo   |
+
+**Semáforo final B2** = peor de los dos indicadores.
+
+| Color | Acción recomendada |
+|-------|--------------------|
+| 🟢 Verde    | Sin restricción adicional |
+| 🟡 Amarillo | Solicitar documentación de soporte (facturas, registros ICA, certificados de cosecha) |
+| 🔴 Rojo     | Inspección técnica presencial antes de aprobación del crédito |
+""")
+
+    # ─── C · INFRAESTRUCTURA ──────────────────────────────────────────────────
+    with st.expander("🏗️ C · Infraestructura Productiva", expanded=True):
+
+        st.markdown("""
+**Hipótesis**
+Un predio sin acceso vial o muy alejado de centros urbanos enfrenta mayores costos
+de transporte y riesgo de inaccesibilidad en épocas de lluvias, lo que reduce
+la rentabilidad y la capacidad de repago.
+""")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**C1 · Distancia al centro urbano más cercano**
+
+- Fuente: OpenStreetMap (OSM) + OSRM routing engine
+- Métrica: distancia por carretera (km) y tiempo estimado de conducción (min)
+- Búsqueda en radio de 80 km
+
+| Distancia | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| < 10 km   | 🟢 Verde    | Sin restricción |
+| 10 – 25 km | 🟡 Amarillo | Verificar costos de transporte en estructura del proyecto |
+| > 25 km   | 🔴 Rojo     | Riesgo logístico alto; verificar acceso a mercados y precios en finca |
+""")
+        with c2:
+            st.markdown("""
+**C2 · Distancia a vía transitable más cercana**
+
+- Fuente: OpenStreetMap (OSM)
+- Métrica: distancia en línea recta al punto más cercano en vía clasificada
+- Búsqueda en radio de 5 km
+
+| Distancia | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| < 500 m    | 🟢 Verde    | Sin restricción |
+| 500 m – 2 km | 🟡 Amarillo | Verificar condición de la vía en temporada de lluvias |
+| > 2 km     | 🔴 Rojo     | Riesgo de inaccesibilidad; costos del primer tramo pueden inviabilizar el negocio |
+
+**Semáforo global C** = peor resultado entre C1 y C2.
+""")
+
+    # ─── D · RIESGO AGROCLIMÁTICO ─────────────────────────────────────────────
+    with st.expander("🌧️ D · Riesgo Agroclimático", expanded=True):
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+ERA5 reanalysis vía Open-Meteo · **10 años** de historia diaria.
+Variables descargadas: precipitación, temperatura máx/mín/media, humedad relativa, velocidad del viento.
+
+**Metodología**
+1. Se calculan indicadores de riesgo anualmente para cada año del período.
+2. Para la evaluación crediticia se usa el **percentil 80 (P80)** de cada indicador —
+   el escenario adverso que ocurre **1 de cada 5 años**.
+3. El score por indicador se interpola linealmente entre los umbrales de la
+   **matriz de vulnerabilidad por cultivo** (0 = sin riesgo, 1 = extremo).
+4. El score global por categoría toma el **peor indicador** dentro de esa categoría.
+5. El score global D es la **media de los peores por categoría**.
+
+**Hipótesis**
+Usar el P80 en lugar de la media captura el riesgo latente de años adversos
+que históricamente han causado pérdidas de cultivo, sin sobredimensionar
+los años normales que no generan impacto crediticio.
+""")
+        with c2:
+            st.markdown("""
+**Categorías de riesgo evaluadas**
+
+| Categoría | Indicadores clave |
+|-----------|------------------|
+| Déficit hídrico | SWI, SPEI, WRSI |
+| Exceso de lluvia | Episodios de lluvia extrema |
+| Inestabilidad de ladera | Susceptibilidad a deslizamiento |
+| Estrés térmico | Temperatura máxima media |
+| Heladas | Días con T mín < umbral por cultivo |
+| Vientos fuertes | Días con velocidad > umbral |
+| Vegetación | NDVI, NDMI, NDRE |
+| Estructura de suelo | VH backscatter SAR |
+| Calidad de suelo | Clase VPS |
+| Aptitud edafoclimática | Clase UPRA |
+| Acceso a mercados | Distancia urbana |
+
+**Tabla de decisión global D**
+
+| Score P80 | Nivel | Acción |
+|-----------|-------|--------|
+| 0.00 – 0.10 | 🟢 Sin riesgo | Sin restricción |
+| 0.10 – 0.25 | 🟢 Bajo | Seguimiento anual estándar |
+| 0.25 – 0.50 | 🟡 Medio | Cláusula de seguimiento trimestral |
+| 0.50 – 0.75 | 🔴 Alto | Seguro agrícola obligatorio |
+| 0.75 – 1.00 | 🚨 Extremo | Evaluar viabilidad del proyecto |
+""")
