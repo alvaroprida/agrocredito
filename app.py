@@ -1727,7 +1727,6 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     #  PDF
     # ════════════════════════════════════════════════════════════════════
-    scoring = st.session_state.get("scoring")
     st.markdown("---")
     st.markdown("### 📄 Reporte Ex-Ante PDF")
 
@@ -1735,28 +1734,65 @@ with tab_validacion:
     with c_info:
         cod_rpt = predio.get("codigo","predio")
         st.caption(
-            f"📄 Incluye: ficha catastral · dictamen · marcos A–C · "
-            f"scoring D con 15 indicadores y umbrales usados · "
-            f"serie climática · sección de firmas.\n\n"
+            f"📄 Incluye: ficha del predio · dictamen ejecutivo · resumen de indicadores · "
+            f"detalle A (frontera + áreas) · B (aptitud + NDVI) · "
+            f"D (riesgo agroclimático) · C (infraestructura) · "
+            f"documentación requerida · firmas.\n\n"
             f"**Archivo:** `reporte_exante_{cod_rpt}.pdf`"
         )
-        if not scoring:
-            st.warning("⚠️ Ejecuta primero el scoring (sección D3) para incluirlo en el PDF.")
 
     with c_btn:
         if st.button("🔄 Generar PDF ejecutivo", type="primary",
                      use_container_width=True, key="gen_pdf"):
             with st.spinner("Generando PDF..."):
                 try:
+                    # Collect risk data if available
+                    _pdf_risk_df = None
+                    _pdf_risk_score = None
+                    _pdf_risk_label = "—"
+                    if _clima_ok and _cultivo_tiene_matriz:
+                        try:
+                            _pdf_risk_df = _get_risk_cached(
+                                c_lat, c_lon, cultivo, mtime=_matrix_mtime())
+                            if not _pdf_risk_df.empty:
+                                _pdf_risk_score = float(aggregate_risk_score(_pdf_risk_df))
+                                _pdf_risk_label = score_to_label(_pdf_risk_score)
+                        except Exception:
+                            pass
+
+                    _pdf_analisis = {
+                        "a1_nivel":     st.session_state.get("a1_nivel", "gris"),
+                        "gdf_frontera": st.session_state.get("gdf_frontera"),
+                        "area_ef":      area_ef,
+                        "pct_ef":       pct_ef,
+                        "area_pend":    area_pend,
+                        "area_ndvi":    area_ndvi,
+                        "area_const":   area_const,
+                        "slope_thr":    _slope_pct,
+                        "ndvi_thr":     _ndvi_thr,
+                        "apt_result":   apt_result if "apt_result" in dir() else None,
+                        "b2_result":    st.session_state.get("b2_result"),
+                        "infra_centro": infra_centro,
+                        "infra_via":    infra_via,
+                        "infra_nivel":  _color_global,
+                        "cultivo":      cultivo,
+                        "municipio":    ubicacion_label,
+                        "c_lat":        c_lat,
+                        "c_lon":        c_lon,
+                        "df_risk":      _pdf_risk_df,
+                        "risk_score":   _pdf_risk_score,
+                        "risk_label":   _pdf_risk_label,
+                    }
                     pdf_bytes = generate_exante_report(
-                        datos=d, predio=predio,
-                        scoring=st.session_state.get("scoring"),
+                        datos=d, predio=predio, analisis=_pdf_analisis,
                     )
                     st.session_state["pdf_bytes"] = pdf_bytes
                     st.session_state["pdf_name"]  = f"reporte_exante_{cod_rpt}.pdf"
                     st.success("✅ PDF listo.")
                 except Exception as e:
+                    import traceback
                     st.error(f"❌ Error generando PDF: {e}")
+                    st.code(traceback.format_exc())
 
         if "pdf_bytes" in st.session_state:
             st.download_button(
