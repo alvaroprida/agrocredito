@@ -2024,47 +2024,114 @@ la rentabilidad y la capacidad de repago.
             st.markdown(f"""
 **Fuente de datos**
 ERA5 reanalysis vía Open-Meteo · **10 años** de historia diaria.
-Variables descargadas: precipitación, temperatura máx/mín/media, humedad relativa, velocidad del viento.
+Variables: precipitación, temperatura máx/mín/media, humedad relativa, velocidad del viento.
+
+**Indicadores por cultivo**
+Los indicadores de riesgo son **específicos al cultivo** seleccionado como input.
+Cada cultivo tiene su propia selección de indicadores, meses de cálculo y curvas de vulnerabilidad,
+calibradas según su fenología y sus umbrales agronómicos de tolerancia.
+El cultivo activo actualmente es: **{_cult_m.capitalize()}**.
 
 **Metodología**
 1. Se calculan indicadores de riesgo anualmente para cada año del período.
 2. Para la evaluación crediticia se usa el **percentil 80 (P80)** de cada indicador —
    el escenario adverso que ocurre **1 de cada 5 años**.
 3. El score por indicador se interpola linealmente entre los umbrales de la
-   **matriz de vulnerabilidad por cultivo** (0 = sin riesgo, 1 = extremo).
-4. El score global por categoría toma el **peor indicador** dentro de esa categoría.
+   **curva de vulnerabilidad** (0 = sin riesgo, 1 = extremo).
+4. El score global por categoría toma el **peor indicador** de esa categoría.
 5. El score global D es la **media de los peores por categoría**.
 
 **Hipótesis**
-Usar el P80 en lugar de la media captura el riesgo latente de años adversos
-que históricamente han causado pérdidas de cultivo, sin sobredimensionar
-los años normales que no generan impacto crediticio.
+Usar el P80 captura el riesgo latente de años adversos que históricamente
+han causado pérdidas de cultivo, sin sobredimensionar los años normales.
 """)
         with c2:
             st.markdown("""
-**Categorías de riesgo evaluadas**
-
-| Categoría | Indicadores clave |
-|-----------|------------------|
-| Déficit hídrico | SWI, SPEI, WRSI |
-| Exceso de lluvia | Episodios de lluvia extrema |
-| Inestabilidad de ladera | Susceptibilidad a deslizamiento |
-| Estrés térmico | Temperatura máxima media |
-| Heladas | Días con T mín < umbral por cultivo |
-| Vientos fuertes | Días con velocidad > umbral |
-| Vegetación | NDVI, NDMI, NDRE |
-| Estructura de suelo | VH backscatter SAR |
-| Calidad de suelo | Clase VPS |
-| Aptitud edafoclimática | Clase UPRA |
-| Acceso a mercados | Distancia urbana |
-
 **Tabla de decisión global D**
 
-| Score P80 | Nivel | Acción |
-|-----------|-------|--------|
+| Score P80 | Nivel | Acción recomendada |
+|-----------|-------|--------------------|
 | 0.00 – 0.10 | 🟢 Sin riesgo | Sin restricción |
 | 0.10 – 0.25 | 🟢 Bajo | Seguimiento anual estándar |
 | 0.25 – 0.50 | 🟡 Medio | Cláusula de seguimiento trimestral |
 | 0.50 – 0.75 | 🔴 Alto | Seguro agrícola obligatorio |
 | 0.75 – 1.00 | 🚨 Extremo | Evaluar viabilidad del proyecto |
+
+**Actualización de curvas**
+Las curvas de vulnerabilidad están almacenadas en el fichero Excel:
+`datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx`
+
+Para modificar umbrales o añadir cultivos: editar el Excel y actualizar el backend
+(redeploy de la aplicación). Los cambios se aplican automáticamente en el
+siguiente cálculo de riesgo para ese cultivo.
 """)
+
+        st.markdown("---")
+        st.markdown("#### 📊 Indicadores por cultivo — curvas de vulnerabilidad")
+        st.caption(
+            "Tabla completa de indicadores de la matriz de vulnerabilidad. "
+            "Filtra por cultivo para ver los indicadores activos y sus umbrales."
+        )
+
+        try:
+            from pathlib import Path as _Path
+            _mx_path = _Path(__file__).parent / "datos" / "indicadores" / "matriz_vulnerabilidad_consolidada.xlsx"
+            _df_mx = pd.read_excel(_mx_path)
+            _df_mx = _df_mx[_df_mx["Cultivo_app"].str.contains("sin equivalente") == False].copy()
+
+            _mx_cols = [
+                "Cultivo_app", "Categoría_riesgo", "Nombre_indicador",
+                "Definición", "Meses_cálculo", "Unidad",
+                "Sin_riesgo_0", "Riesgo_bajo_0.25", "Riesgo_medio_0.5",
+                "Riesgo_alto_0.75", "Riesgo_extremo_1", "Forma_curva",
+            ]
+            _df_show = _df_mx[_mx_cols].rename(columns={
+                "Cultivo_app":       "Cultivo",
+                "Categoría_riesgo":  "Categoría",
+                "Nombre_indicador":  "Indicador",
+                "Definición":        "Definición",
+                "Meses_cálculo":     "Meses",
+                "Unidad":            "Unidad",
+                "Sin_riesgo_0":      "Sin riesgo",
+                "Riesgo_bajo_0.25":  "Bajo (0.25)",
+                "Riesgo_medio_0.5":  "Medio (0.50)",
+                "Riesgo_alto_0.75":  "Alto (0.75)",
+                "Riesgo_extremo_1":  "Extremo (1.0)",
+                "Forma_curva":       "Curva",
+            })
+
+            _cultivos_mx = sorted(_df_show["Cultivo"].unique().tolist())
+            _default_cult = (
+                _cult_m.capitalize()
+                if _cult_m.capitalize() in _cultivos_mx
+                else _cultivos_mx[0]
+            )
+            _sel_cult = st.selectbox(
+                "Filtrar por cultivo",
+                options=["Todos"] + _cultivos_mx,
+                index=_cultivos_mx.index(_default_cult) + 1
+                if _default_cult in _cultivos_mx else 0,
+                key="met_cult_filter",
+            )
+            _df_filt = (
+                _df_show if _sel_cult == "Todos"
+                else _df_show[_df_show["Cultivo"] == _sel_cult]
+            )
+            st.dataframe(
+                _df_filt.reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Definición":  st.column_config.TextColumn(width="large"),
+                    "Indicador":   st.column_config.TextColumn(width="medium"),
+                    "Meses":       st.column_config.TextColumn(width="small"),
+                    "Curva":       st.column_config.TextColumn(width="medium"),
+                },
+            )
+            st.caption(
+                f"📁 Fuente: `datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx` · "
+                f"{len(_df_filt)} indicadores mostrados · "
+                "Para modificar umbrales o añadir cultivos, editar el Excel y actualizar el backend."
+            )
+        except Exception as _e_mx:
+            st.warning(f"No se pudo cargar la matriz de vulnerabilidad: {_e_mx}")
