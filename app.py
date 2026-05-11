@@ -1082,13 +1082,70 @@ with tab_validacion:
             df_ts    = pd.DataFrame(b2["stats"]).sort_values("date")
             n_scenes = len(df_ts)
 
+            # ── Metodología ──────────────────────────────────────────────
+            with st.expander("ℹ️ Metodología y criterios de evaluación", expanded=False):
+                st.markdown(f"""
+**Fuente de datos**
+Imágenes Sentinel-2 descargadas vía EOSDA Field Analytics API.
+Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro por AOI, no por tile).
+Período analizado: últimos 3 años (~{n_scenes} escenas válidas).
+
+---
+
+**Umbrales para *{cultivo}***
+
+| Indicador | Umbral aplicado |
+|-----------|----------------|
+| NDVI mínimo por escena (actividad vegetativa) | **≥ {s_thr:.2f}** |
+| Pico NDVI anual (actividad estacional confirmada) | **≥ {p_thr:.2f}** |
+
+Los umbrales varían por cultivo: cultivos de hoja densa (plátano, aguacate) tienen
+umbral más alto que cultivos de ciclo corto (papa, cebolla).
+
+---
+
+**Indicadores y lógica del semáforo**
+
+*Indicador 1 · % de escenas activas*
+De todas las escenas válidas del período, se calcula qué fracción tiene un NDVI mediano ≥ {s_thr:.2f}.
+Un valor alto indica que el predio ha mantenido vegetación activa de forma continuada.
+
+| Resultado | Semáforo |
+|-----------|----------|
+| ≥ 40 % de escenas activas | 🟢 Verde |
+| 20 – 40 % | 🟡 Amarillo |
+| < 20 % | 🔴 Rojo |
+
+*Indicador 2 · Pico NDVI anual*
+Para cada año del período se identifica la escena con mayor NDVI.
+Si ese pico supera {p_thr:.2f} se considera que ese año tuvo actividad productiva real.
+
+| Resultado | Semáforo |
+|-----------|----------|
+| Pico ≥ {p_thr:.2f} en **todos** los años | 🟢 Verde |
+| Pico ≥ {p_thr:.2f} en todos menos uno | 🟡 Amarillo |
+| Pico ≥ {p_thr:.2f} en menos de la mitad | 🔴 Rojo |
+
+**Semáforo final**: el peor de los dos indicadores.
+
+---
+
+**Decisión recomendada por color**
+
+| Color | Criterio | Acción recomendada |
+|-------|----------|--------------------|
+| 🟢 Verde | Ambos indicadores confirmados | Sin restricción adicional |
+| 🟡 Amarillo | Al menos un indicador parcial | Solicitar documentación (facturas, registros ICA, certificaciones de cosecha) |
+| 🔴 Rojo | Actividad no confirmada | Inspección técnica presencial antes de aprobación |
+""")
+
             # ── KPIs ─────────────────────────────────────────────────────
             c1,c2,c3,c4 = st.columns(4)
             with c1: kpi("Escenas activas",
                          f"{b2['pct_active']:.0f}%",
                          f"NDVI ≥ {s_thr:.2f}")
             with c2: kpi("Pico NDVI anual",
-                         f"{b2['years_with_peak']}/{b2['n_years']} años",
+                         f"{b2['years_with_peak']}/{b2['n_years']} años calendario",
                          f"pico ≥ {p_thr:.2f}")
             with c3: kpi("NDVI mediano global", f"{b2['overall_median']:.3f}")
             with c4: kpi("Escenas analizadas", n_scenes)
