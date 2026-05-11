@@ -194,9 +194,14 @@ MOCK_NDVI = {"ndvi_promedio": 0.71, "area_ndvi_bajo_ha": 0.6, "umbral_ndvi": 0.4
 
 COLOR_SEMAFORO   = {"verde":"semaforo-verde","naranja":"semaforo-naranja","rojo":"semaforo-rojo"}
 COLORES_FRONTERA = {
-    "Frontera agrícola":              "#16a34a",
-    "Frontera agrícola condicionada": "#d97706",
-    "Área protegida":                 "#dc2626",
+    "Frontera Agrícola no condicionada":              "#16a34a",
+    "Ambiental":                                      "#d97706",
+    "Ambiental/Étnico-Cultural":                      "#d97706",
+    "Ambiental/Riesgo de desastres":                  "#d97706",
+    "Ambiental/Riesgo de desastres/Étnico-Cultural":  "#d97706",
+    "Étnico-Cultural":                                "#d97706",
+    "Gestión riesgo de desastres":                    "#d97706",
+    "Riesgo de desastres/Étnico-Cultural":            "#d97706",
 }
 COLORES_APTITUD = {
     "Alta":"#15803d","Media":"#ca8a04","Baja":"#b45309","No apta":"#dc2626",
@@ -624,13 +629,43 @@ with tab_validacion:
                 area_ha=("area_ha","sum"), pct_predio=("pct_predio","sum")
             ).reset_index().rename(columns={"tipo_condi":"Tipo de zona",
                                             "area_ha":"Área (ha)","pct_predio":"% del predio"})
+
+            # Área fuera de frontera agrícola (no intersecta ninguna capa)
+            _pct_total   = float(gdf_frontera["pct_predio"].sum())
+            _pct_outside = round(max(0.0, 100.0 - _pct_total), 1)
+            _area_outside = round(_pct_outside / 100 * float(predio.get("area_ha", 0)), 4)
+            if _pct_outside > 2:
+                _row_out = pd.DataFrame([{
+                    "Tipo de zona": "⛔ Fuera de Frontera Agrícola",
+                    "Área (ha)":    _area_outside,
+                    "% del predio": _pct_outside,
+                }])
+                df_front = pd.concat([df_front, _row_out], ignore_index=True)
+
             st.dataframe(df_front, use_container_width=True, hide_index=True)
-            tipos  = gdf_frontera["tipo_condi"].unique().tolist()
-            nivel  = "verde" if all("condicionada" not in t.lower() and
-                                    "protegida" not in t.lower() for t in tipos) else "naranja"
-            semaforo(f"Zona agrícola: **{', '.join(tipos)}**", nivel)
+
+            tipos = gdf_frontera["tipo_condi"].unique().tolist()
+            _tipos_cond = [t for t in tipos if t != "Frontera Agrícola no condicionada"]
+
+            if _pct_outside > 2:
+                nivel = "rojo"
+                _msg  = (f"⛔ **{_pct_outside:.1f}% del predio ({_area_outside} ha) cae fuera de "
+                         f"la Frontera Agrícola** — zona de exclusión legal. "
+                         f"Áreas dentro: {', '.join(tipos)}.")
+            elif _tipos_cond:
+                nivel = "naranja"
+                _msg  = (f"⚠️ Parte del predio en **Frontera Agrícola condicionada**: "
+                         f"{', '.join(_tipos_cond)}. "
+                         f"Verificar restricción específica antes de aprobación.")
+            else:
+                nivel = "verde"
+                _msg  = "✅ Todo el predio dentro de **Frontera Agrícola no condicionada**."
+
+            semaforo(_msg, nivel)
+            st.session_state["a1_nivel"] = nivel
         else:
             st.warning("No se encontró información de frontera agrícola para este predio.")
+            st.session_state["a1_nivel"] = "gris"
 
     with st.expander("📏 A2 · Área Efectiva Cultivable", expanded=True):
 
@@ -1602,14 +1637,21 @@ with tab_validacion:
     _gdf_front = st.session_state.get("gdf_frontera")
     _apt_res   = apt_result if "apt_result" in dir() else None
 
-    _sem_a1 = ("verde"
-               if _gdf_front is not None and len(_gdf_front) > 0 and
-                  all("condicionada" not in t.lower() and "protegida" not in t.lower()
-                      for t in _gdf_front["tipo_condi"].unique())
-               else "naranja" if _gdf_front is not None and len(_gdf_front) > 0
-               else "gris")
-    _res_a1 = (", ".join(_gdf_front["tipo_condi"].unique())
-               if _gdf_front is not None and len(_gdf_front) > 0 else "—")
+    # A1: read nivel already computed in the A1 expander (stored in session_state)
+    _sem_a1 = st.session_state.get("a1_nivel", "gris")
+    if _gdf_front is not None and len(_gdf_front) > 0:
+        _tipos_a1   = _gdf_front["tipo_condi"].unique().tolist()
+        _pct_tot_a1 = float(_gdf_front["pct_predio"].sum())
+        _pct_out_a1 = round(max(0.0, 100.0 - _pct_tot_a1), 1)
+        _tipos_cond_a1 = [t for t in _tipos_a1 if t != "Frontera Agrícola no condicionada"]
+        if _pct_out_a1 > 2:
+            _res_a1 = f"{_pct_out_a1:.1f}% fuera de Frontera Agrícola"
+        elif _tipos_cond_a1:
+            _res_a1 = f"Condicionada: {', '.join(_tipos_cond_a1)}"
+        else:
+            _res_a1 = "Todo en Frontera Agrícola no condicionada"
+    else:
+        _res_a1 = "—"
 
     _sem_a2 = "verde" if pct_ef >= 70 else "amarillo" if pct_ef >= 40 else "rojo"
     _res_a2 = f"{area_ef} ha ({pct_ef:.0f}% del predio)"
@@ -1816,11 +1858,24 @@ Zonas condicionadas o excluidas aumentan el riesgo de incumplimiento o expropiac
             st.markdown("""
 **Tabla de decisión**
 
-| Zona | Semáforo | Acción recomendada |
-|------|----------|--------------------|
-| Frontera agrícola | 🟢 Verde | Sin restricción |
-| Frontera agrícola condicionada | 🟡 Amarillo | Verificar condicionante; solicitar plan de manejo ambiental |
-| Área protegida / excluida | 🔴 Rojo | No procede el crédito sin autorización ambiental expresa |
+| Situación | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| Todo el predio en Frontera Agrícola **no condicionada** | 🟢 Verde | Sin restricción |
+| Al menos una parte en Frontera Agrícola **condicionada** | 🟡 Amarillo | Verificar restricción específica (ambiental, étnico-cultural, riesgo de desastres) y exigir plan de manejo |
+| Al menos una parte **fuera** de Frontera Agrícola | 🔴 Rojo | Zona de exclusión legal — no procede el crédito sin autorización ambiental expresa |
+
+**Tipos de condición en la capa**
+
+| Condición | Descripción |
+|-----------|-------------|
+| Frontera Agrícola no condicionada | Sin restricción legal |
+| Ambiental | Restricción por ecosistema frágil o área de protección ambiental |
+| Étnico-Cultural | Territorio colectivo, resguardo indígena o comunidad afro |
+| Gestión riesgo de desastres | Zona con amenaza por inundación, deslizamiento u otro evento |
+| Combinaciones (ej. Ambiental/Étnico-Cultural) | Coexistencia de múltiples restricciones |
+| Fuera de frontera | No pertenece a ninguna categoría de Frontera Agrícola — exclusión legal total |
+
+La lógica es conservadora: la presencia de **cualquier fracción** del predio fuera de frontera activa el semáforo rojo.
 """)
 
         st.markdown("---")
