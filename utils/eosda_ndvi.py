@@ -16,7 +16,8 @@ import time
 import base64
 import warnings
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import requests
@@ -315,6 +316,95 @@ def _crop_thresholds(cultivo: str):
     return _DEFAULT_THR
 
 
+# ── Field Analytics API (B2) ─────────────────────────────────────────────────
+
+FA_FIELD_URL = "https://api-connect.eos.com/field-management"
+FA_TREND_URL = "https://api-connect.eos.com/field-analytics/trend"
+
+
+def _fa_create_field(gdf_predio: gpd.GeoDataFrame, api_key: str) -> str:
+    """Crea un field temporal en EOSDA Field Management y devuelve su id."""
+    gdf_4326 = gdf_predio.to_crs("EPSG:4326")
+    resp = requests.post(
+        f"{FA_FIELD_URL}?api_key={api_key}",
+        json={
+            "geometry": gdf_4326.geometry.iloc[0].__geo_interface__,
+            "name": f"tmp_{int(time.time())}",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def _fa_delete_field(field_id: str, api_key: str) -> None:
+    try:
+        requests.delete(f"{FA_FIELD_URL}/{field_id}?api_key={api_key}", timeout=15)
+    except Exception:
+        pass
+
+
+def _fa_request_trend(field_id: str, date_start: str, date_end: str,
+                      api_key: str, max_cloud: int = 20) -> str:
+    """Lanza un task de trend analysis y devuelve el request_id."""
+    resp = requests.post(
+        f"{FA_TREND_URL}/{field_id}?api_key={api_key}",
+        json={"params": {
+            "date_start":           date_start,
+            "date_end":             date_end,
+            "index":                "NDVI",
+            "data_source":          "S2",
+            "distinct_by_date":     True,
+            "max_cloud_cover_in_aoi": max_cloud,
+        }},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["request_id"]
+
+
+def _fa_poll_trend(field_id: str, request_id: str, api_key: str,
+                   timeout: int = 300) -> list:
+    """Espera con backoff exponencial hasta que el task esté listo."""
+    elapsed, interval = 0, 5
+    while elapsed < timeout:
+        resp = requests.get(
+            f"{FA_TREND_URL}/{field_id}/{request_id}?api_key={api_key}",
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", interval))
+            time.sleep(wait); elapsed += wait; continue
+        resp.raise_for_status()
+        data   = resp.json()
+        status = data.get("status", "")
+        if status == "success":
+            return data.get("result", [])
+        if status in ("failed", "error"):
+            raise RuntimeError(f"Field Analytics task falló: {data}")
+        time.sleep(interval); elapsed += interval
+        interval = min(interval * 2, 60)
+    raise TimeoutError(f"Task {request_id} no completó en {timeout}s")
+
+
+def _fa_fetch_year(field_id: str, date_start: str, date_end: str,
+                   api_key: str, max_cloud: int) -> list:
+    request_id = _fa_request_trend(field_id, date_start, date_end, api_key, max_cloud)
+    return _fa_poll_trend(field_id, request_id, api_key)
+
+
+def _fa_year_ranges(n_years: int = 3) -> list:
+    """Devuelve n_years rangos de un año cada uno, de más reciente a más antiguo."""
+    today = datetime.utcnow().date()
+    return [
+        (
+            (today - timedelta(days=365 * (i + 1))).isoformat(),
+            (today - timedelta(days=365 * i)).isoformat(),
+        )
+        for i in range(n_years)
+    ]
+
+
 def _semaforo_b2(pct_active: float, years_with_peak: int, n_years: int):
     """Returns ('verde'|'amarillo'|'rojo', s_pct, s_peak)."""
     s_pct  = "verde" if pct_active >= 40 else ("amarillo" if pct_active >= 20 else "rojo")
@@ -327,63 +417,74 @@ def _semaforo_b2(pct_active: float, years_with_peak: int, n_years: int):
 
 
 def get_productivity_analysis(
-    gdf_predio: gpd.GeoDataFrame,
-    cultivo:    str,
-    n_months:   int = 36,
+    gdf_predio:  gpd.GeoDataFrame,
+    cultivo:     str,
+    n_years:     int = 3,
+    max_cloud:   int = 20,
 ) -> dict:
     """
-    B2 · Actividad Productiva vía EOSDA Statistics API.
+    B2 · Actividad Productiva vía EOSDA Field Analytics API.
 
-    Returns dict:
-        stats            list of scene records (date, cloud, median, p10, p90 …)
-        pct_active       % escenas con median NDVI >= scene_threshold
-        peak_by_year     {year: max_ndvi} para los años del período
-        years_with_peak  nº años con peak >= peak_threshold
-        n_years          nº de años distintos en el período
-        overall_median   mediana global de todas las escenas
-        scene_threshold  umbral de escena usado
-        peak_threshold   umbral de pico anual usado
-        semaforo         'verde' | 'amarillo' | 'rojo'
-        semaforo_pct     semáforo basado solo en % activo
-        semaforo_peak    semáforo basado solo en pico anual
-        decision         texto de decisión para la entidad crediticia
+    Crea un field temporal, lanza n_years requests en paralelo (uno por año),
+    combina los resultados y borra el field.
+
+    Returns dict con stats, semáforo, decisión crediticia y métricas NDVI.
     """
     api_key = _get_api_key()
     if not api_key:
         raise ValueError("EOSDA_API_KEY no configurada en secrets.")
 
-    stats = _fetch_ndvi_stats(gdf_predio, api_key, n_months)
+    field_id = _fa_create_field(gdf_predio, api_key)
+    try:
+        year_ranges = _fa_year_ranges(n_years)
+        all_records: list = []
+        with ThreadPoolExecutor(max_workers=n_years) as pool:
+            futs = {
+                pool.submit(_fa_fetch_year, field_id, s, e, api_key, max_cloud): (s, e)
+                for s, e in year_ranges
+            }
+            for fut in as_completed(futs):
+                try:
+                    all_records.extend(fut.result())
+                except Exception:
+                    pass   # si un año falla, continuamos con los demás
+    finally:
+        _fa_delete_field(field_id, api_key)
+
+    # Limpiar y ordenar (FA ya filtra por cloud, pero pueden venir NaN)
+    stats = sorted(
+        [r for r in all_records
+         if isinstance(r.get("median"), (int, float)) and not np.isnan(r["median"])],
+        key=lambda x: x["date"],
+    )
     if not stats:
-        raise RuntimeError("No se obtuvieron escenas válidas de EOSDA para el predio.")
+        raise RuntimeError(
+            "No se obtuvieron escenas válidas de EOSDA Field Analytics para el predio."
+        )
 
     scene_thr, peak_thr = _crop_thresholds(cultivo)
 
-    medianas = [s["median"] for s in stats if not np.isnan(s["median"])]
-    active   = [m for m in medianas if m >= scene_thr]
-    pct_active = len(active) / max(len(medianas), 1) * 100
+    medianas   = [s["median"] for s in stats]
+    pct_active = sum(1 for m in medianas if m >= scene_thr) / max(len(medianas), 1) * 100
 
-    # Pico NDVI por año
     peak_by_year: dict = {}
     for s in stats:
         try:
             yr = int(s["date"][:4])
         except (ValueError, TypeError):
             continue
-        med = s["median"]
-        if not np.isnan(med):
-            peak_by_year[yr] = max(peak_by_year.get(yr, -1.0), med)
+        peak_by_year[yr] = max(peak_by_year.get(yr, -1.0), s["median"])
 
-    n_years         = len(peak_by_year)
+    n_yrs           = len(peak_by_year)
     years_with_peak = sum(1 for v in peak_by_year.values() if v >= peak_thr)
-
-    semaforo, s_pct, s_peak = _semaforo_b2(pct_active, years_with_peak, max(n_years, 1))
+    semaforo, s_pct, s_peak = _semaforo_b2(pct_active, years_with_peak, max(n_yrs, 1))
 
     return {
         "stats":           stats,
         "pct_active":      round(pct_active, 1),
         "peak_by_year":    peak_by_year,
         "years_with_peak": years_with_peak,
-        "n_years":         n_years,
+        "n_years":         n_yrs,
         "overall_median":  round(float(np.median(medianas)), 3) if medianas else None,
         "scene_threshold": scene_thr,
         "peak_threshold":  peak_thr,
