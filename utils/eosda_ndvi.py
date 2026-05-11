@@ -112,22 +112,8 @@ def _date_range(n_months: int = 12):
 
 def _fetch_ndvi_stats_cached(geojson_str: str, date_start: str, date_end: str,
                               api_key: str) -> list:
-    """
-    Versión cacheable de la llamada EOSDA: recibe strings serializables,
-    no objetos GeoDataFrame. Decorada con @st.cache_data (TTL 24 h).
-    """
-    try:
-        import streamlit as st
-
-        @st.cache_data(ttl=86_400, show_spinner=False)
-        def _inner(geojson_str, date_start, date_end, api_key):
-            return _do_fetch(geojson_str, date_start, date_end, api_key)
-
-        return _inner(geojson_str, date_start, date_end, api_key)
-
-    except ImportError:
-        # Fuera de Streamlit (tests, scripts) → llamada directa sin caché
-        return _do_fetch(geojson_str, date_start, date_end, api_key)
+    """Delega directamente en _do_fetch. El caché se gestiona desde app.py."""
+    return _do_fetch(geojson_str, date_start, date_end, api_key)
 
 
 def _do_fetch(geojson_str: str, date_start: str, date_end: str,

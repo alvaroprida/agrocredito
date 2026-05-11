@@ -1056,17 +1056,23 @@ with tab_validacion:
             "rojo":     '<span style="background:#fee2e2;color:#7f1d1d;border-radius:4px;padding:1px 7px;font-size:0.78rem">🔴 No confirmado</span>',
         }
 
-        with st.spinner("Descargando serie NDVI (EOSDA)…"):
-            try:
-                import json as _json
-                _geo = _json.dumps(
-                    predio["gdf"].to_crs("EPSG:4326").geometry.iloc[0].__geo_interface__
-                )
-                b2 = _get_b2_cached(_geo, cultivo)
-                b2_ok = True
-            except Exception as _e:
-                b2_ok = False
-                st.error(f"❌ No se pudo obtener la serie NDVI: {_e}")
+        import json as _json
+        _geo = _json.dumps(
+            predio["gdf"].to_crs("EPSG:4326").geometry.iloc[0].__geo_interface__
+        )
+        if st.button("🔄 Calcular actividad productiva (NDVI)", type="primary", key="btn_b2"):
+            st.session_state["b2_result"] = None
+            with st.spinner("Descargando serie NDVI histórica (EOSDA · 3 años)…"):
+                try:
+                    st.session_state["b2_result"] = _get_b2_cached(_geo, cultivo)
+                except Exception as _e:
+                    st.error(f"❌ No se pudo obtener la serie NDVI: {_e}")
+
+        b2     = st.session_state.get("b2_result")
+        b2_ok  = b2 is not None
+        if not b2_ok:
+            st.info("Pulsa **Calcular actividad productiva** para descargar la serie NDVI. "
+                    "El resultado queda en caché 24 h.")
 
         if b2_ok:
             s        = b2["semaforo"]
