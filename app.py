@@ -57,7 +57,7 @@ from utils.risk_indicators  import (
     score_to_label, score_to_color, aggregate_risk_score,
 )
 from utils.eosda_terrain  import get_terrain_analysis
-from utils.eosda_ndvi     import get_ndvi_analysis
+from utils.stac_ndvi      import get_ndvi_stac
 from utils.risk_scoring   import (
     score_riesgo, INDICADORES, GRUPOS,
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
@@ -757,7 +757,10 @@ with tab_validacion:
         st.markdown("---")
 
         st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
-        st.caption("Sentinel-2 · Mediana NDVI anual · Zonas con NDVI < umbral se excluyen del área efectiva")
+        st.caption(
+            "Sentinel-2 L2A COG · P25 real por píxel · 3 años de historia · "
+            "Filtro de nubosidad por SCL dentro del predio"
+        )
 
         ndvi_threshold = st.slider(
             "Umbral NDVI mínimo productivo",
@@ -765,25 +768,43 @@ with tab_validacion:
             format="%.2f", key="ndvi_threshold",
         )
 
-        if st.button("🔄 Calcular NDVI histórico", type="primary", key="btn_ndvi"):
+        if st.button("🔄 Calcular NDVI histórico (STAC)", type="primary", key="btn_ndvi"):
             st.session_state["ndvi_result"] = None
-            with st.spinner("Descargando estadísticas NDVI (Sentinel-2)..."):
-                try:
-                    ndvi_result = get_ndvi_analysis(
-                        predio["gdf"], ndvi_threshold=ndvi_threshold, n_months=12)
-                    st.session_state["ndvi_result"] = ndvi_result
-                except Exception as e:
-                    st.error(f"❌ Error al obtener NDVI: {e}")
+            _prog_bar  = st.progress(0.0)
+            _prog_text = st.empty()
+
+            def _progress(done, total, msg):
+                _prog_bar.progress(min(done / max(total, 1), 1.0))
+                _prog_text.caption(msg)
+
+            try:
+                ndvi_result = get_ndvi_stac(
+                    predio["gdf"],
+                    ndvi_threshold=ndvi_threshold,
+                    n_years=3,
+                    max_cloud_pct=20.0,
+                    progress_cb=_progress,
+                )
+                st.session_state["ndvi_result"] = ndvi_result
+            except Exception as e:
+                st.error(f"❌ Error al obtener NDVI: {e}")
+            finally:
+                _prog_bar.empty()
+                _prog_text.empty()
 
         ndvi_result = st.session_state.get("ndvi_result")
         if ndvi_result is None:
             st.info("Pulsa **Calcular NDVI histórico** para descargar datos de Sentinel-2.")
         else:
+            _p25_sc = ndvi_result.get("ndvi_p25_mean")
+            _n_used = ndvi_result.get("n_scenes_used", ndvi_result.get("n_scenes", "—"))
+            _n_tot  = ndvi_result.get("n_scenes_total")
             c1,c2,c3,c4 = st.columns(4)
-            with c1: kpi("NDVI P25 anual", f"{ndvi_result['ndvi_p25']:.3f}" if ndvi_result.get('ndvi_p25') else "—")
-            with c2: kpi("NDVI mínimo",    f"{ndvi_result['ndvi_min']:.3f}" if ndvi_result['ndvi_min']    else "—")
-            with c3: kpi("NDVI máximo",    f"{ndvi_result['ndvi_max']:.3f}" if ndvi_result['ndvi_max']    else "—")
-            with c4: kpi("Escenas sin nubes", ndvi_result["n_scenes"])
+            with c1: kpi("NDVI P25 medio",  f"{_p25_sc:.3f}" if _p25_sc is not None else "—")
+            with c2: kpi("NDVI P25 mínimo", f"{ndvi_result['ndvi_min']:.3f}" if ndvi_result['ndvi_min'] else "—")
+            with c3: kpi("NDVI P25 máximo", f"{ndvi_result['ndvi_max']:.3f}" if ndvi_result['ndvi_max'] else "—")
+            with c4: kpi("Escenas válidas",
+                         f"{_n_used}/{_n_tot}" if _n_tot else str(_n_used))
             st.markdown("---")
             c1,c2 = st.columns(2)
             with c1:
@@ -809,27 +830,24 @@ with tab_validacion:
                     f'<span style="font-size:0.82rem">Bajo umbral · {ndvi_result["area_low_ha"]} ha ({ndvi_result["pct_low"]}%)</span></div>'
                     '</div>', unsafe_allow_html=True,
                 )
-            if ndvi_result.get("stats"):
-                df_ndvi_ts = pd.DataFrame(ndvi_result["stats"]).sort_values("date")
+            _scene_stats = ndvi_result.get("scene_stats") or ndvi_result.get("stats")
+            if _scene_stats:
+                df_ts = pd.DataFrame(_scene_stats).sort_values("date")
+                _y_col = "mean_ndvi" if "mean_ndvi" in df_ts.columns else "median"
                 fig_ts = go.Figure()
                 fig_ts.add_trace(go.Scatter(
-                    x=df_ndvi_ts["date"], y=df_ndvi_ts["median"],
-                    mode="lines+markers", name="NDVI mediano",
-                    line=dict(color="#16a34a", width=2), marker=dict(size=5),
+                    x=df_ts["date"], y=df_ts[_y_col],
+                    mode="lines+markers", name="NDVI medio predio",
+                    line=dict(color="#16a34a", width=2), marker=dict(size=4),
                 ))
-                if "p90" in df_ndvi_ts.columns and "p10" in df_ndvi_ts.columns:
-                    fig_ts.add_trace(go.Scatter(
-                        x=df_ndvi_ts["date"].tolist()+df_ndvi_ts["date"].tolist()[::-1],
-                        y=df_ndvi_ts["p90"].tolist()+df_ndvi_ts["p10"].tolist()[::-1],
-                        fill="toself", fillcolor="rgba(22,163,74,0.15)",
-                        line=dict(color="rgba(0,0,0,0)"), name="Rango P10–P90",
-                    ))
                 fig_ts.add_hline(y=ndvi_threshold, line_dash="dash", line_color="#dc2626",
                                  annotation_text=f"Umbral {ndvi_threshold:.2f}")
-                fig_ts.update_layout(title="Serie temporal NDVI (último año)",
-                                     height=280, margin=dict(t=40,b=20),
-                                     xaxis=dict(title="Fecha"),
-                                     yaxis=dict(title="NDVI", range=[-0.1,1.0]))
+                fig_ts.update_layout(
+                    title=f"Serie temporal NDVI medio en el predio · {len(df_ts)} escenas útiles",
+                    height=280, margin=dict(t=40,b=20),
+                    xaxis=dict(title="Fecha"),
+                    yaxis=dict(title="NDVI medio", range=[-0.1, 1.0]),
+                )
                 st.plotly_chart(fig_ts, use_container_width=True)
 
             st.session_state["area_ndvi_bajo_ha"] = ndvi_result["area_low_ha"]
