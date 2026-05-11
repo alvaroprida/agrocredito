@@ -1685,6 +1685,7 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     #  PDF
     # ════════════════════════════════════════════════════════════════════
+    scoring = st.session_state.get("scoring")
     st.markdown("---")
     st.markdown("### 📄 Reporte Ex-Ante PDF")
 
