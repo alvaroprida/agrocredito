@@ -324,16 +324,27 @@ FA_TREND_URL = "https://api-connect.eos.com/field-analytics/trend"
 
 def _fa_create_field(gdf_predio: gpd.GeoDataFrame, api_key: str) -> str:
     """Crea un field temporal en EOSDA Field Management y devuelve su id."""
+    from shapely.geometry import mapping
     gdf_4326 = gdf_predio.to_crs("EPSG:4326")
+    geom = gdf_4326.geometry.iloc[0]
+
+    # EOSDA Field Management solo acepta Polygon simple
+    if geom.geom_type == "MultiPolygon":
+        geom = max(geom.geoms, key=lambda g: g.area)
+
+    # Simplificar si tiene demasiados vértices
+    if geom.geom_type == "Polygon" and len(geom.exterior.coords) > 500:
+        geom = geom.simplify(0.00001, preserve_topology=True)
+
     resp = requests.post(
         f"{FA_FIELD_URL}?api_key={api_key}",
-        json={
-            "geometry": gdf_4326.geometry.iloc[0].__geo_interface__,
-            "name": f"tmp_{int(time.time())}",
-        },
+        json={"geometry": mapping(geom), "name": f"tmp_{int(time.time())}"},
         timeout=30,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(
+            f"EOSDA Field Management {resp.status_code}: {resp.text}"
+        )
     return resp.json()["id"]
 
 
@@ -350,16 +361,17 @@ def _fa_request_trend(field_id: str, date_start: str, date_end: str,
     resp = requests.post(
         f"{FA_TREND_URL}/{field_id}?api_key={api_key}",
         json={"params": {
-            "date_start":           date_start,
-            "date_end":             date_end,
-            "index":                "NDVI",
-            "data_source":          "S2",
-            "distinct_by_date":     True,
+            "date_start":             date_start,
+            "date_end":               date_end,
+            "index":                  "NDVI",
+            "data_source":            "S2",
+            "distinct_by_date":       True,
             "max_cloud_cover_in_aoi": max_cloud,
         }},
         timeout=30,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(f"EOSDA trend request {resp.status_code}: {resp.text}")
     return resp.json()["request_id"]
 
 
