@@ -191,9 +191,9 @@ def _build_ndvi_array(stats: list, shape: tuple = (64, 64),
     p10s     = [s["p10"]    for s in stats if not np.isnan(s.get("p10", np.nan))]
     p90s     = [s["p90"]    for s in stats if not np.isnan(s.get("p90", np.nan))]
 
-    ndvi_med = float(np.median(medianas)) if medianas else np.nan
-    ndvi_p10 = float(np.median(p10s))     if p10s     else ndvi_med - 0.1
-    ndvi_p90 = float(np.median(p90s))     if p90s     else ndvi_med + 0.1
+    ndvi_p25 = float(np.percentile(medianas, 25)) if medianas else np.nan
+    ndvi_p10 = float(np.median(p10s))             if p10s     else ndvi_p25 - 0.1
+    ndvi_p90 = float(np.median(p90s))             if p90s     else ndvi_p25 + 0.1
 
     h, w  = shape
     cy, cx = h / 2, w / 2
@@ -203,7 +203,7 @@ def _build_ndvi_array(stats: list, shape: tuple = (64, 64),
 
     arr = ndvi_p90 - dist_norm * (ndvi_p90 - ndvi_p10)
     arr = np.clip(arr, -1, 1)
-    return arr, ndvi_med, arr < ndvi_threshold
+    return arr, ndvi_p25, arr < ndvi_threshold
 
 
 # ── PNG base64 para Folium ────────────────────────────────────────────────────
@@ -283,7 +283,7 @@ def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
 
     stats = _fetch_ndvi_stats(gdf_predio, api_key, n_months)
 
-    ndvi_arr, ndvi_med, low_mask = _build_ndvi_array(
+    ndvi_arr, ndvi_p25, low_mask = _build_ndvi_array(
         stats, shape=(64, 64), ndvi_threshold=ndvi_threshold
     )
 
@@ -293,9 +293,14 @@ def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
     pct_low     = float(low_mask.sum() / low_mask.size * 100) if low_mask.size > 0 else 0.0
     area_low_ha = area_predio_ha * pct_low / 100
 
+    medianas    = [s["median"] for s in stats if not np.isnan(s["median"])]
+    ndvi_median = float(np.median(medianas)) if medianas else None
+    bounds_wgs84 = gdf_predio.to_crs("EPSG:4326").total_bounds.tolist()
+
     return {
         "stats":          stats,
-        "ndvi_median":    float(ndvi_med) if not np.isnan(ndvi_med) else None,
+        "ndvi_p25":       float(ndvi_p25) if not np.isnan(ndvi_p25) else None,
+        "ndvi_median":    ndvi_median,
         "ndvi_min":       float(min(s["min"] for s in stats)) if stats else None,
         "ndvi_max":       float(max(s["max"] for s in stats)) if stats else None,
         "n_scenes":       len(stats),
@@ -303,6 +308,7 @@ def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
         "area_low_ha":    round(area_low_ha, 4),
         "pct_low":        round(pct_low, 1),
         "ndvi_threshold": ndvi_threshold,
+        "bounds_wgs84":   bounds_wgs84,
         "maps":           _build_ndvi_maps(gdf_predio, ndvi_arr, low_mask,
                                            ndvi_threshold, stats),
     }

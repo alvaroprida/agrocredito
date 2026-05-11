@@ -416,6 +416,42 @@ def _fit(m, gdf):
     b = gdf.geometry.iloc[0].bounds
     m.fit_bounds([[b[1],b[0]],[b[3],b[2]]])
 
+def _colored_mask_png(mask_arr, r, g, b, alpha=0.55):
+    """Converts a boolean mask to a colored PNG base64 string for ImageOverlay."""
+    from io import BytesIO
+    import base64
+    from PIL import Image as _PILImg
+    h, w = mask_arr.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[mask_arr] = [r, g, b, int(alpha * 255)]
+    img = _PILImg.fromarray(rgba, mode="RGBA")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+def _rasterize_gdf_to_mask(gdf, bounds_wgs84, shape):
+    """Rasterizes a GeoDataFrame to a boolean mask grid aligned to bounds_wgs84."""
+    try:
+        import rasterio.features
+        from rasterio.transform import from_bounds
+        minx, miny, maxx, maxy = bounds_wgs84
+        h, w = shape
+        transform = from_bounds(minx, miny, maxx, maxy, w, h)
+        gdf_4326 = gdf.to_crs("EPSG:4326")
+        shapes_iter = [
+            (geom.__geo_interface__, 1)
+            for geom in gdf_4326.geometry
+            if geom is not None and not geom.is_empty
+        ]
+        if not shapes_iter:
+            return np.zeros(shape, dtype=bool)
+        burned = rasterio.features.rasterize(
+            shapes_iter, out_shape=shape, transform=transform, dtype=np.uint8
+        )
+        return burned > 0
+    except Exception:
+        return np.zeros(shape, dtype=bool)
+
 def mapa_predio_simple(lat, lon, predio):
     m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
@@ -744,14 +780,14 @@ with tab_validacion:
             st.info("Pulsa **Calcular NDVI histórico** para descargar datos de Sentinel-2.")
         else:
             c1,c2,c3,c4 = st.columns(4)
-            with c1: kpi("NDVI mediano anual", f"{ndvi_result['ndvi_median']:.3f}" if ndvi_result['ndvi_median'] else "—")
-            with c2: kpi("NDVI mínimo",        f"{ndvi_result['ndvi_min']:.3f}"    if ndvi_result['ndvi_min']    else "—")
-            with c3: kpi("NDVI máximo",        f"{ndvi_result['ndvi_max']:.3f}"    if ndvi_result['ndvi_max']    else "—")
-            with c4: kpi("Escenas sin nubes",  ndvi_result["n_scenes"])
+            with c1: kpi("NDVI P25 anual", f"{ndvi_result['ndvi_p25']:.3f}" if ndvi_result.get('ndvi_p25') else "—")
+            with c2: kpi("NDVI mínimo",    f"{ndvi_result['ndvi_min']:.3f}" if ndvi_result['ndvi_min']    else "—")
+            with c3: kpi("NDVI máximo",    f"{ndvi_result['ndvi_max']:.3f}" if ndvi_result['ndvi_max']    else "—")
+            with c4: kpi("Escenas sin nubes", ndvi_result["n_scenes"])
             st.markdown("---")
             c1,c2 = st.columns(2)
             with c1:
-                st.markdown("**🛰️ NDVI mediano anual**")
+                st.markdown("**🛰️ NDVI histórico (P25 anual)**")
                 st_folium(ndvi_result["maps"]["ndvi_map"], width=420, height=340,
                           returned_objects=[], key="map_ndvi")
                 st.markdown(_colorscale_bar(
@@ -816,8 +852,10 @@ with tab_validacion:
         _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
         _terrain   = st.session_state.get("terrain")
         _ndvi_res  = st.session_state.get("ndvi_result")
+        _gdf_const = st.session_state.get("gdf_construcciones")
         _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
         _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
+        _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
         if _s_mask is not None and _n_mask is not None:
             from PIL import Image as _Im
@@ -825,8 +863,17 @@ with tab_validacion:
             _nr    = np.array(_Im.fromarray(_n_mask.astype(np.uint8)).resize(
                          (w, h), _Im.NEAREST)).astype(bool)
             _union = _s_mask | _nr
-            area_excluida = float(_union.sum()/_union.size*area_total) + area_const
-            metodo = "exacto (unión pendiente + NDVI)"
+            _has_b = False
+            if _gdf_const is not None and len(_gdf_const) > 0 and _s_bounds is not None:
+                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _s_bounds, (h, w))
+                _union  = _union | _b_mask
+                _has_b  = True
+                metodo  = "exacto (unión pendiente + NDVI + construcciones)"
+            else:
+                metodo = "exacto (unión pendiente + NDVI)"
+            area_excluida = float(_union.sum() / _union.size * area_total)
+            if not _has_b:
+                area_excluida += area_const
         else:
             area_excluida = area_pend + area_ndvi + area_const
             metodo = "aproximado (calcular A2-A y A2-C para resultado exacto)"
@@ -836,24 +883,31 @@ with tab_validacion:
 
         m_a1 = _base_map(predio["gdf"])
         if ver_predio_a1: _add_predio(m_a1, predio["gdf"])
-        if ver_pendiente:
-            geom_pend = predio["gdf"].geometry.iloc[0].buffer(-0.001)
-            if not geom_pend.is_empty:
-                gdf_pend = gpd.GeoDataFrame([{"tipo":"No cultivable"}],
-                                             geometry=[geom_pend], crs="EPSG:4326")
-                folium.GeoJson(data=gdf_pend.to_json(),
-                               style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
-                                                          "weight":1,"fillOpacity":0.5},
-                               tooltip=f"Pendiente >{_slope_pct}%").add_to(m_a1)
-        if ver_ndvi_bajo:
-            geom_ndvi = predio["gdf"].geometry.iloc[0].buffer(-0.0015)
-            if not geom_ndvi.is_empty:
-                gdf_ndvi_viz = gpd.GeoDataFrame([{"tipo":"NDVI bajo"}],
-                                                 geometry=[geom_ndvi], crs="EPSG:4326")
-                folium.GeoJson(data=gdf_ndvi_viz.to_json(),
-                               style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
-                                                          "weight":1,"fillOpacity":0.5},
-                               tooltip=f"NDVI < {_ndvi_thr:.2f}").add_to(m_a1)
+        if ver_pendiente and _terrain is not None and _s_bounds is not None:
+            slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
+            bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
+            folium.raster_layers.ImageOverlay(
+                image=slope_png, bounds=bx_s, opacity=1.0,
+                name=f"Pendiente >{_slope_pct}%",
+            ).add_to(m_a1)
+        if ver_ndvi_bajo and _n_mask is not None:
+            _ndvi_bounds = (_ndvi_res.get("bounds_wgs84")
+                            if _ndvi_res else None)
+            if _ndvi_bounds is None:
+                _ndvi_bounds = predio["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
+            ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
+            bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
+            folium.raster_layers.ImageOverlay(
+                image=ndvi_png, bounds=bx_n, opacity=1.0,
+                name=f"NDVI < {_ndvi_thr:.2f}",
+            ).add_to(m_a1)
+        if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
+            folium.GeoJson(
+                data=_gdf_const.to_json(),
+                style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
+                                           "weight":1.5,"fillOpacity":0.70},
+                tooltip="Construcción",
+            ).add_to(m_a1)
         _fit(m_a1, predio["gdf"])
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
 
