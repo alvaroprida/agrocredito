@@ -58,6 +58,7 @@ from utils.risk_indicators  import (
 )
 from utils.eosda_terrain  import get_terrain_analysis
 from utils.stac_ndvi      import get_ndvi_stac
+from utils.eosda_ndvi     import get_productivity_analysis
 from utils.risk_scoring   import (
     score_riesgo, INDICADORES, GRUPOS,
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
@@ -88,6 +89,13 @@ def _get_risk_cached(lat: float, lon: float, cultivo: str, mtime: float = 0.0):
     extra = needed_extra_hourly(cultivo)
     df = get_historical_climate(lat, lon, n_years=10, extra_hourly=extra)
     return compute_risk_for_crop(df, cultivo)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_b2_cached(geojson_str: str, cultivo: str):
+    import json
+    from shapely.geometry import shape
+    gdf = gpd.GeoDataFrame(geometry=[shape(json.loads(geojson_str))], crs="EPSG:4326")
+    return get_productivity_analysis(gdf, cultivo)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
@@ -1029,22 +1037,138 @@ with tab_validacion:
             st.warning("No se encontró información de aptitud para este predio.")
 
     with st.expander("📊 B2 · Actividad Productiva (NDVI)", expanded=True):
-        st.caption("⚠️ Datos hardcoded · Se conectará a EOSDA API en la próxima versión")
-        ndvi = MOCK_NDVI
-        c1,c2,c3 = st.columns(3)
-        with c1: kpi("NDVI promedio 3 años", ndvi["ndvi_promedio"])
-        with c2: kpi("Umbral NDVI", ndvi["umbral_ndvi"])
-        with c3:
-            ndvi_ok = ndvi["ndvi_promedio"] >= ndvi["umbral_ndvi"]
-            kpi("Actividad productiva", "✅ Activa" if ndvi_ok else "⚠️ Por verificar")
-        fig_ndvi = px.line(x=MESES, y=d["ndvi_mensual_hist"],
-                           labels={"x":"Mes","y":"NDVI"},
-                           title="Serie NDVI mensual (últimos 12 meses)",
-                           color_discrete_sequence=["#16a34a"])
-        fig_ndvi.add_hline(y=ndvi["umbral_ndvi"], line_dash="dash", line_color="#dc2626",
-                           annotation_text=f"Umbral {ndvi['umbral_ndvi']}")
-        fig_ndvi.update_layout(height=250, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_ndvi, use_container_width=True)
+        st.caption(
+            "Sentinel-2 vía EOSDA Statistics API · Últimos 3 años · "
+            "Confirma que el predio ha tenido actividad vegetativa activa"
+        )
+
+        _B2_STYLE = {
+            "verde":    {"bg":"#d1fae5","bd":"#059669","tx":"#065f46",
+                         "label":"🟢 Actividad productiva confirmada"},
+            "amarillo": {"bg":"#fef9c3","bd":"#ca8a04","tx":"#713f12",
+                         "label":"🟡 Verificación recomendada"},
+            "rojo":     {"bg":"#fee2e2","bd":"#dc2626","tx":"#7f1d1d",
+                         "label":"🔴 Actividad productiva no confirmada"},
+        }
+        _SEM_BADGE = {
+            "verde":    '<span style="background:#d1fae5;color:#065f46;border-radius:4px;padding:1px 7px;font-size:0.78rem">🟢 Confirmado</span>',
+            "amarillo": '<span style="background:#fef9c3;color:#713f12;border-radius:4px;padding:1px 7px;font-size:0.78rem">🟡 Parcial</span>',
+            "rojo":     '<span style="background:#fee2e2;color:#7f1d1d;border-radius:4px;padding:1px 7px;font-size:0.78rem">🔴 No confirmado</span>',
+        }
+
+        with st.spinner("Descargando serie NDVI (EOSDA)…"):
+            try:
+                import json as _json
+                _geo = _json.dumps(
+                    predio["gdf"].to_crs("EPSG:4326").geometry.iloc[0].__geo_interface__
+                )
+                b2 = _get_b2_cached(_geo, cultivo)
+                b2_ok = True
+            except Exception as _e:
+                b2_ok = False
+                st.error(f"❌ No se pudo obtener la serie NDVI: {_e}")
+
+        if b2_ok:
+            s        = b2["semaforo"]
+            sty      = _B2_STYLE[s]
+            s_thr    = b2["scene_threshold"]
+            p_thr    = b2["peak_threshold"]
+            df_ts    = pd.DataFrame(b2["stats"]).sort_values("date")
+            n_scenes = len(df_ts)
+
+            # ── KPIs ─────────────────────────────────────────────────────
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: kpi("Escenas activas",
+                         f"{b2['pct_active']:.0f}%",
+                         f"NDVI ≥ {s_thr:.2f}")
+            with c2: kpi("Pico NDVI anual",
+                         f"{b2['years_with_peak']}/{b2['n_years']} años",
+                         f"pico ≥ {p_thr:.2f}")
+            with c3: kpi("NDVI mediano global", f"{b2['overall_median']:.3f}")
+            with c4: kpi("Escenas analizadas", n_scenes)
+
+            st.markdown("---")
+
+            # ── Semáforo ─────────────────────────────────────────────────
+            peak_rows = "".join(
+                f'<span style="margin-right:1rem"><b>{yr}</b>: {v:.2f} '
+                f'{"✅" if v >= p_thr else "⚠️"}</span>'
+                for yr, v in sorted(b2["peak_by_year"].items())
+            )
+            st.markdown(
+                f'<div style="background:{sty["bg"]};border-left:5px solid {sty["bd"]};'
+                f'padding:1rem 1.2rem;border-radius:8px;margin-bottom:1rem">'
+                f'<div style="font-size:1.05rem;font-weight:700;color:{sty["tx"]};'
+                f'margin-bottom:0.4rem">{sty["label"]}</div>'
+                f'<div style="font-size:0.88rem;color:{sty["tx"]};margin-bottom:0.6rem">'
+                f'{b2["decision"]}</div>'
+                f'<div style="display:flex;gap:2rem;font-size:0.82rem;color:{sty["tx"]};'
+                f'flex-wrap:wrap">'
+                f'<div>Escenas activas ({s_thr:.2f}): '
+                f'<b>{b2["pct_active"]:.0f}%</b> &nbsp;{_SEM_BADGE[b2["semaforo_pct"]]}</div>'
+                f'<div>Pico anual ({p_thr:.2f}): '
+                f'<b>{b2["years_with_peak"]}/{b2["n_years"]} años</b> '
+                f'&nbsp;{_SEM_BADGE[b2["semaforo_peak"]]}</div>'
+                f'</div>'
+                f'<div style="margin-top:0.5rem;font-size:0.80rem;color:{sty["tx"]}">'
+                f'Picos por año: {peak_rows}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # ── Serie temporal ────────────────────────────────────────────
+            if "median" in df_ts.columns:
+                df_ts["above"] = df_ts["median"] >= s_thr
+                # Pico por año
+                peak_map = b2["peak_by_year"]
+                df_ts["year"] = df_ts["date"].str[:4].astype(int)
+                df_ts["is_peak"] = df_ts.apply(
+                    lambda r: abs(r["median"] - peak_map.get(r["year"], -99)) < 1e-6,
+                    axis=1,
+                )
+
+                fig_b2 = go.Figure()
+
+                # Línea de conexión tenue
+                fig_b2.add_trace(go.Scatter(
+                    x=df_ts["date"], y=df_ts["median"],
+                    mode="lines", line=dict(color="#cbd5e1", width=1),
+                    showlegend=False,
+                ))
+                # Puntos: verde / rojo según umbral
+                for above, color, name in [
+                    (True,  "#16a34a", f"NDVI ≥ {s_thr:.2f}"),
+                    (False, "#dc2626", f"NDVI < {s_thr:.2f}"),
+                ]:
+                    mask = df_ts["above"] == above
+                    fig_b2.add_trace(go.Scatter(
+                        x=df_ts[mask]["date"], y=df_ts[mask]["median"],
+                        mode="markers", marker=dict(color=color, size=5),
+                        name=name,
+                    ))
+                # Estrellas: pico anual
+                df_peak = df_ts[df_ts["is_peak"]]
+                fig_b2.add_trace(go.Scatter(
+                    x=df_peak["date"], y=df_peak["median"],
+                    mode="markers",
+                    marker=dict(symbol="star", size=12, color="#f59e0b",
+                                line=dict(color="#92400e", width=1)),
+                    name="Pico anual",
+                ))
+
+                fig_b2.add_hline(
+                    y=s_thr, line_dash="dash", line_color="#dc2626",
+                    annotation_text=f"Umbral escena {s_thr:.2f}",
+                    annotation_position="top left",
+                )
+                fig_b2.update_layout(
+                    title=f"Serie NDVI mediano por escena · {n_scenes} escenas · últimos 3 años",
+                    height=300, margin=dict(t=45, b=20),
+                    xaxis=dict(title="Fecha"),
+                    yaxis=dict(title="NDVI mediano", range=[-0.05, 1.0]),
+                    legend=dict(orientation="h", y=-0.18),
+                )
+                st.plotly_chart(fig_b2, use_container_width=True)
 
     # ════════════════════════════════════════════════════════════════════
     #  C · INFRAESTRUCTURA

@@ -272,6 +272,142 @@ def _build_ndvi_maps(gdf_predio, ndvi_arr, low_mask, ndvi_threshold, stats):
     return {"ndvi_map": ndvi_map, "prod_map": prod_map}
 
 
+# ── B2 · Actividad Productiva ────────────────────────────────────────────────
+
+# Umbrales NDVI por cultivo: (umbral_escena, umbral_pico_anual)
+# umbral_escena : mediana NDVI de la escena para considerarla "vegetación activa"
+# umbral_pico   : máximo NDVI anual mínimo para confirmar un año con actividad
+_NDVI_CROP_THR: dict = {
+    "aguacate":  (0.40, 0.50),
+    "cacao":     (0.38, 0.48),
+    "café":      (0.38, 0.48),
+    "cafe":      (0.38, 0.48),
+    "cebolla":   (0.22, 0.32),
+    "durazno":   (0.30, 0.45),
+    "fresa":     (0.22, 0.35),
+    "granadilla":(0.30, 0.42),
+    "guayaba":   (0.38, 0.48),
+    "gulupa":    (0.30, 0.42),
+    "limón":     (0.38, 0.48),
+    "limon":     (0.38, 0.48),
+    "lulo":      (0.28, 0.38),
+    "maíz":      (0.30, 0.50),
+    "maiz":      (0.30, 0.50),
+    "mango":     (0.38, 0.48),
+    "maracuyá":  (0.30, 0.42),
+    "maracuya":  (0.30, 0.42),
+    "mora":      (0.28, 0.38),
+    "naranja":   (0.38, 0.48),
+    "papa":      (0.22, 0.38),
+    "piña":      (0.28, 0.42),
+    "pina":      (0.28, 0.42),
+    "plátano":   (0.42, 0.55),
+    "platano":   (0.42, 0.55),
+    "uchuva":    (0.22, 0.35),
+}
+_DEFAULT_THR = (0.32, 0.45)
+
+_DECISIONS_B2 = {
+    "verde":    "Actividad productiva confirmada. Sin restricción adicional por este indicador.",
+    "amarillo": (
+        "Actividad productiva parcialmente confirmada. "
+        "Solicitar documentación de respaldo (facturas de venta, registros ICA, "
+        "certificaciones de cosecha)."
+    ),
+    "rojo": (
+        "Actividad productiva no confirmada por teledetección. "
+        "Requiere inspección técnica presencial antes de aprobación."
+    ),
+}
+
+
+def _crop_thresholds(cultivo: str):
+    c = cultivo.lower()
+    for key, val in _NDVI_CROP_THR.items():
+        if key in c:
+            return val
+    return _DEFAULT_THR
+
+
+def _semaforo_b2(pct_active: float, years_with_peak: int, n_years: int):
+    """Returns ('verde'|'amarillo'|'rojo', s_pct, s_peak)."""
+    s_pct  = "verde" if pct_active >= 40 else ("amarillo" if pct_active >= 20 else "rojo")
+    s_peak = ("verde"    if years_with_peak == n_years
+               else "amarillo" if years_with_peak >= n_years - 1
+               else "rojo")
+    order  = {"verde": 0, "amarillo": 1, "rojo": 2}
+    worst  = max(s_pct, s_peak, key=lambda x: order[x])
+    return worst, s_pct, s_peak
+
+
+def get_productivity_analysis(
+    gdf_predio: gpd.GeoDataFrame,
+    cultivo:    str,
+    n_months:   int = 36,
+) -> dict:
+    """
+    B2 · Actividad Productiva vía EOSDA Statistics API.
+
+    Returns dict:
+        stats            list of scene records (date, cloud, median, p10, p90 …)
+        pct_active       % escenas con median NDVI >= scene_threshold
+        peak_by_year     {year: max_ndvi} para los años del período
+        years_with_peak  nº años con peak >= peak_threshold
+        n_years          nº de años distintos en el período
+        overall_median   mediana global de todas las escenas
+        scene_threshold  umbral de escena usado
+        peak_threshold   umbral de pico anual usado
+        semaforo         'verde' | 'amarillo' | 'rojo'
+        semaforo_pct     semáforo basado solo en % activo
+        semaforo_peak    semáforo basado solo en pico anual
+        decision         texto de decisión para la entidad crediticia
+    """
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError("EOSDA_API_KEY no configurada en secrets.")
+
+    stats = _fetch_ndvi_stats(gdf_predio, api_key, n_months)
+    if not stats:
+        raise RuntimeError("No se obtuvieron escenas válidas de EOSDA para el predio.")
+
+    scene_thr, peak_thr = _crop_thresholds(cultivo)
+
+    medianas = [s["median"] for s in stats if not np.isnan(s["median"])]
+    active   = [m for m in medianas if m >= scene_thr]
+    pct_active = len(active) / max(len(medianas), 1) * 100
+
+    # Pico NDVI por año
+    peak_by_year: dict = {}
+    for s in stats:
+        try:
+            yr = int(s["date"][:4])
+        except (ValueError, TypeError):
+            continue
+        med = s["median"]
+        if not np.isnan(med):
+            peak_by_year[yr] = max(peak_by_year.get(yr, -1.0), med)
+
+    n_years         = len(peak_by_year)
+    years_with_peak = sum(1 for v in peak_by_year.values() if v >= peak_thr)
+
+    semaforo, s_pct, s_peak = _semaforo_b2(pct_active, years_with_peak, max(n_years, 1))
+
+    return {
+        "stats":           stats,
+        "pct_active":      round(pct_active, 1),
+        "peak_by_year":    peak_by_year,
+        "years_with_peak": years_with_peak,
+        "n_years":         n_years,
+        "overall_median":  round(float(np.median(medianas)), 3) if medianas else None,
+        "scene_threshold": scene_thr,
+        "peak_threshold":  peak_thr,
+        "semaforo":        semaforo,
+        "semaforo_pct":    s_pct,
+        "semaforo_peak":   s_peak,
+        "decision":        _DECISIONS_B2[semaforo],
+    }
+
+
 # ── Función principal ─────────────────────────────────────────────────────────
 
 def get_ndvi_analysis(gdf_predio: gpd.GeoDataFrame,
