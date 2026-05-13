@@ -309,7 +309,7 @@ def get_valor_potencial(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None
 
 def get_construcciones(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
     """
-    Devuelve construcciones del predio via JOIN predios_mvp.codigo = construcciones_mvp.terreno_co.
+    Devuelve construcciones que intersectan el polígono del predio.
     Columnas: codigo, identifica, tipo_const, numero_pis, area_ha
     """
     if USE_REAL_DB and DB_LIBS_OK:
@@ -332,7 +332,7 @@ def _query_construcciones_mock(gdf_predio):
 
 
 def _query_construcciones_real(gdf_predio):
-    codigo_predio = gdf_predio["codigo"].iloc[0]
+    geojson_predio = json.dumps(gdf_predio.geometry.iloc[0].__geo_interface__)
     sql = text("""
         SELECT
             c.codigo,
@@ -342,11 +342,11 @@ def _query_construcciones_real(gdf_predio):
             ROUND((ST_Area(c.geom::geography) / 10000)::numeric, 6) AS area_ha,
             ST_AsGeoJSON(c.geom)::json AS geojson
         FROM construcciones_mvp c
-        JOIN predios_mvp p ON c.terreno_co = p.codigo
+        JOIN predios p ON ST_Intersects(c.geom, p.wkb_geometry)
         WHERE p.codigo = :codigo
     """)
     with _get_engine().connect() as conn:
-        rows = conn.execute(sql, {"codigo": codigo_predio}).fetchall()
+        rows = conn.execute(sql, {"codigo": gdf_predio["codigo"].iloc[0]}).fetchall()
     if not rows:
         return None
     records, geometries = [], []
