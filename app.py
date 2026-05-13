@@ -921,26 +921,48 @@ with tab_validacion:
         _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
         _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
-        if _s_mask is not None and _n_mask is not None:
-            from PIL import Image as _Im
-            h, w   = _s_mask.shape
-            _nr    = np.array(_Im.fromarray(_n_mask.astype(np.uint8)).resize(
-                         (w, h), _Im.NEAREST)).astype(bool)
-            _union = _s_mask | _nr
+        # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
+        from PIL import Image as _Im
+
+        if _n_mask is not None:
+            # NDVI grid is the reference — GEE provides an accurate predio pixel mask
+            _pmask = ~np.isnan(_ndvi_res["ndvi_p25"])   # True inside predio
+            h, w   = _n_mask.shape
+            _union = _n_mask.copy()
+
+            if _s_mask is not None:
+                # Resize slope mask to NDVI grid
+                _sr    = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                    .resize((w, h), _Im.NEAREST)).astype(bool)
+                _union = _union | _sr
+
             _has_b = False
-            if _gdf_const is not None and len(_gdf_const) > 0 and _s_bounds is not None:
-                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _s_bounds, (h, w))
+            _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
+            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
+                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
                 _union  = _union | _b_mask
                 _has_b  = True
-                metodo  = "exacto (unión pendiente + NDVI + construcciones)"
-            else:
-                metodo = "exacto (unión pendiente + NDVI)"
-            area_excluida = float(_union.sum() / _union.size * area_total)
-            if not _has_b:
-                area_excluida += area_const
+
+            layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
+            if _has_b:
+                layers.append("construcciones")
+            metodo = "exacto (unión " + " + ".join(layers) + ")"
+
+            # Area = fraction of predio pixels that are non-cultivable × total area
+            n_predio      = max(int(_pmask.sum()), 1)
+            n_excluido    = int((_union & _pmask).sum())
+            area_excluida = float(n_excluido / n_predio * area_total)
+
+        elif _s_mask is not None:
+            # Only slope mask available — use it with area_const added separately
+            h, w          = _s_mask.shape
+            _union        = _s_mask.copy()
+            _has_b        = False
+            area_excluida = float(_union.sum() / max(_union.size, 1) * area_total) + area_const
+            metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
         else:
             area_excluida = area_pend + area_ndvi + area_const
-            metodo = "aproximado (calcular A2-A y A2-C para resultado exacto)"
+            metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
 
         area_ef = round(max(area_total - area_excluida, 0), 2)
         pct_ef  = round(area_ef/area_total*100) if area_total > 0 else 0
@@ -978,18 +1000,17 @@ with tab_validacion:
         c_left, c_right = st.columns([2,1])
         with c_left:
             solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
-            df_area = pd.DataFrame({
-                "Componente": [
-                    "Área total del predio",
-                    f"− Pendiente >{_slope_pct}% (A2-A)",
-                    f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
-                    "− Construcciones (A2-B)",
-                    f"  ↳ Solapamiento evitado ({metodo})",
-                    "✅ Área efectiva cultivable",
-                ],
-                "Hectáreas": [area_total,-area_pend,-area_ndvi,-area_const,
-                              solapamiento,area_ef],
-            })
+            _componentes = ["Área total del predio",
+                            f"− Pendiente >{_slope_pct}% (A2-A)",
+                            f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
+                            "− Construcciones (A2-B)"]
+            _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
+            if solapamiento > 0:
+                _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
+                _hectareas.append(solapamiento)
+            _componentes.append("✅ Área efectiva cultivable")
+            _hectareas.append(area_ef)
+            df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
             st.dataframe(
                 df_area.style.apply(lambda x: [
                     "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
