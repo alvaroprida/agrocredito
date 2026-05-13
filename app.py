@@ -814,7 +814,7 @@ with tab_validacion:
             format="%.2f", key="ndvi_threshold",
         )
 
-        if st.button("🔄 Calcular NDVI histórico (STAC)", type="primary", key="btn_ndvi"):
+        if st.button("🔄 Calcular NDVI histórico (GEE)", type="primary", key="btn_ndvi"):
             st.session_state["ndvi_result"] = None
             _prog_bar  = st.progress(0.0)
             _prog_text = st.empty()
