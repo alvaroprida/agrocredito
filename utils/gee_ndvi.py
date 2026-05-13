@@ -35,18 +35,28 @@ def _init_gee():
     global _GEE_INITIALIZED
     if _GEE_INITIALIZED:
         return
-    try:
-        import streamlit as st
-        sa_json = st.secrets["gee"]["service_account_json"]
+
+    import streamlit as st
+
+    sa_json = st.secrets.get("gee", {}).get("service_account_json")
+    if sa_json:
         sa_dict = json.loads(sa_json) if isinstance(sa_json, str) else dict(sa_json)
         credentials = ee.ServiceAccountCredentials(
             email=sa_dict["client_email"],
             key_data=json.dumps(sa_dict),
         )
         ee.Initialize(credentials=credentials, project=GEE_PROJECT)
-    except Exception:
-        # Local fallback: assumes `earthengine authenticate --project agricolombia` was run
-        ee.Initialize(project=GEE_PROJECT)
+    else:
+        # Local fallback: requires prior `earthengine authenticate --project agricolombia`
+        try:
+            ee.Initialize(project=GEE_PROJECT)
+        except Exception:
+            raise RuntimeError(
+                "No se encontraron credenciales GEE. "
+                "Añade [gee] service_account_json en los Secrets de Streamlit Cloud, "
+                "o ejecuta `earthengine authenticate` localmente."
+            )
+
     _GEE_INITIALIZED = True
 
 
