@@ -669,117 +669,388 @@ with tab_validacion:
             st.warning("No se encontró información de frontera agrícola para este predio.")
             st.session_state["a1_nivel"] = "gris"
 
-    with st.expander("📏 A2 · Área Efectiva Cultivable", expanded=True):
 
-        @st.fragment
-        def _terrain_fragment():
-            _pr = st.session_state.get("predio")
-            if _pr is None:
-                return
-            st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
-            st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
+    # ── A2 · Área Efectiva Cultivable ─────────────────────────────────────────
+    # Fragments defined at tab level — not nested inside any expander
 
-            _slope_thr = st.slider(
-                "Umbral de pendiente no cultivable (%)",
-                min_value=3, max_value=75, value=25, step=1, key="slope_threshold",
-            )
+    @st.fragment
+    def _terrain_fragment():
+        _pr = st.session_state.get("predio")
+        if _pr is None:
+            return
+        st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
+        st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
 
-            if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
-                _ok = False
-                with st.spinner("Descargando DEM y calculando terreno..."):
-                    try:
-                        _t = get_terrain_analysis(_pr["gdf"], float(_slope_thr))
-                        st.session_state["terrain"] = _t
-                        st.session_state["area_pendiente_excluida_ha"] = _t["stats"]["area_no_cultivable_ha"]
-                        _ok = True
-                    except Exception as e:
-                        st.error(f"❌ Error al obtener datos de terreno: {e}")
-                if _ok:
-                    st.rerun(scope="app")
+        _slope_thr = st.slider(
+            "Umbral de pendiente no cultivable (%)",
+            min_value=3, max_value=75, value=25, step=1, key="slope_threshold",
+        )
 
-            _t = st.session_state.get("terrain")
-            if _t is None:
-                st.info("Pulsa **Calcular terreno** para descargar el DEM desde EOSDA API.")
-            else:
-                _s    = _t["stats"]
-                _maps = _t["maps"]
-                st.markdown("**Estadísticas del predio**")
-                c1,c2,c3,c4,c5 = st.columns(5)
-                with c1: kpi("Elevación mínima",  f"{_s['elev_min']:.0f}",   "m")
-                with c2: kpi("Elevación media",   f"{_s['elev_mean']:.0f}",  "m")
-                with c3: kpi("Elevación máxima",  f"{_s['elev_max']:.0f}",   "m")
-                with c4: kpi("Pendiente media",   f"{_s['slope_mean']:.1f}", "%")
-                with c5: kpi("Aspecto dominante", _s["aspect_dominant"])
-                st.markdown("---")
+        if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
+            _ok = False
+            with st.spinner("Descargando DEM y calculando terreno..."):
+                try:
+                    _t = get_terrain_analysis(_pr["gdf"], float(_slope_thr))
+                    st.session_state["terrain"] = _t
+                    st.session_state["area_pendiente_excluida_ha"] = _t["stats"]["area_no_cultivable_ha"]
+                    _ok = True
+                except Exception as e:
+                    st.error(f"❌ Error al obtener datos de terreno: {e}")
+            if _ok:
+                st.rerun(scope="app")
 
-                c1,c2 = st.columns(2)
-                with c1:
-                    st.markdown("**🏔️ Elevación (DEM)**")
-                    st_folium(_maps["dem_map"], width=420, height=340,
-                              returned_objects=[], key="map_dem")
-                    st.markdown(_colorscale_bar(
-                        "Elevación", units="m s.n.m.",
-                        colors=["#006837","#1a9850","#66bd63","#d9ef8b",
-                                "#fee08b","#fdae61","#f46d43","#a50026"],
-                        ticks=[f"{_s['elev_min']:.0f}m",
-                               f"{_s['elev_min']+(_s['elev_max']-_s['elev_min'])*0.33:.0f}m",
-                               f"{_s['elev_min']+(_s['elev_max']-_s['elev_min'])*0.66:.0f}m",
-                               f"{_s['elev_max']:.0f}m"],
-                    ), unsafe_allow_html=True)
-                with c2:
-                    st.markdown("**📐 Pendiente (Slope)**")
-                    st_folium(_maps["slope_map"], width=420, height=340,
-                              returned_objects=[], key="map_slope")
-                    st.markdown(_colorscale_bar(
-                        "Pendiente", units="%",
-                        colors=["#1a9850","#91cf60","#d9ef8b","#fee08b","#fc8d59","#d73027"],
-                        ticks=["0%","10%","20%","30%","40%","50%+"],
-                    ), unsafe_allow_html=True)
+        _t = st.session_state.get("terrain")
+        if _t is None:
+            st.info("Pulsa **Calcular terreno** para descargar el DEM desde EOSDA API.")
+        else:
+            _s    = _t["stats"]
+            _maps = _t["maps"]
+            st.markdown("**Estadísticas del predio**")
+            c1,c2,c3,c4,c5 = st.columns(5)
+            with c1: kpi("Elevación mínima",  f"{_s['elev_min']:.0f}",   "m")
+            with c2: kpi("Elevación media",   f"{_s['elev_mean']:.0f}",  "m")
+            with c3: kpi("Elevación máxima",  f"{_s['elev_max']:.0f}",   "m")
+            with c4: kpi("Pendiente media",   f"{_s['slope_mean']:.1f}", "%")
+            with c5: kpi("Aspecto dominante", _s["aspect_dominant"])
+            st.markdown("---")
 
-                c3,c4 = st.columns(2)
-                with c3:
-                    st.markdown("**🧭 Aspecto (Orientación)**")
-                    st_folium(_maps["aspect_map"], width=420, height=340,
-                              returned_objects=[], key="map_aspect")
-                    st.markdown(_colorscale_bar(
-                        "Orientación", units="",
-                        colors=["#ff0000","#ff8800","#ffff00","#00cc00",
-                                "#0000ff","#8800ff","#ff0088","#ff0000"],
-                        ticks=["N","NE","E","SE","S","SO","O","NO","N"],
-                    ), unsafe_allow_html=True)
-                with c4:
-                    st.markdown(f"**🌱 Zona cultivable (pendiente < {_slope_thr}%)**")
-                    st_folium(_maps["cultiv_map"], width=420, height=340,
-                              returned_objects=[], key="map_cultiv")
-                    st.markdown(
-                        '<div style="display:flex;gap:1.5rem;margin-top:8px">'
-                        '<div style="display:flex;align-items:center;gap:6px">'
-                        '<div style="width:16px;height:16px;border-radius:3px;background:#16a34a"></div>'
-                        f'<span style="font-size:0.82rem">Cultivable · {_s["area_cultivable_ha"]} ha ({_s["pct_cultivable"]}%)</span></div>'
-                        '<div style="display:flex;align-items:center;gap:6px">'
-                        '<div style="width:16px;height:16px;border-radius:3px;background:#dc2626"></div>'
-                        f'<span style="font-size:0.82rem">No cultivable · {_s["area_no_cultivable_ha"]} ha ({100-_s["pct_cultivable"]:.1f}%)</span></div>'
-                        '</div>', unsafe_allow_html=True,
-                    )
+            c1,c2 = st.columns(2)
+            with c1:
+                st.markdown("**🏔️ Elevación (DEM)**")
+                st_folium(_maps["dem_map"], width=420, height=340,
+                          returned_objects=[], key="map_dem")
+                st.markdown(_colorscale_bar(
+                    "Elevación", units="m s.n.m.",
+                    colors=["#006837","#1a9850","#66bd63","#d9ef8b",
+                            "#fee08b","#fdae61","#f46d43","#a50026"],
+                    ticks=[f"{_s['elev_min']:.0f}m",
+                           f"{_s['elev_min']+(_s['elev_max']-_s['elev_min'])*0.33:.0f}m",
+                           f"{_s['elev_min']+(_s['elev_max']-_s['elev_min'])*0.66:.0f}m",
+                           f"{_s['elev_max']:.0f}m"],
+                ), unsafe_allow_html=True)
+            with c2:
+                st.markdown("**📐 Pendiente (Slope)**")
+                st_folium(_maps["slope_map"], width=420, height=340,
+                          returned_objects=[], key="map_slope")
+                st.markdown(_colorscale_bar(
+                    "Pendiente", units="%",
+                    colors=["#1a9850","#91cf60","#d9ef8b","#fee08b","#fc8d59","#d73027"],
+                    ticks=["0%","10%","20%","30%","40%","50%+"],
+                ), unsafe_allow_html=True)
 
-                st.markdown("---")
-                st.markdown("**Distribución de clases de pendiente**")
-                _clases  = list(_s["slope_classes"].keys())
-                _valores = list(_s["slope_classes"].values())
-                _fig_cls = go.Figure(go.Bar(
-                    x=_clases, y=_valores,
-                    marker_color=["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"],
-                    text=[f"{v:.1f}%" for v in _valores], textposition="outside",
+            c3,c4 = st.columns(2)
+            with c3:
+                st.markdown("**🧭 Aspecto (Orientación)**")
+                st_folium(_maps["aspect_map"], width=420, height=340,
+                          returned_objects=[], key="map_aspect")
+                st.markdown(_colorscale_bar(
+                    "Orientación", units="",
+                    colors=["#ff0000","#ff8800","#ffff00","#00cc00",
+                            "#0000ff","#8800ff","#ff0088","#ff0000"],
+                    ticks=["N","NE","E","SE","S","SO","O","NO","N"],
+                ), unsafe_allow_html=True)
+            with c4:
+                st.markdown(f"**🌱 Zona cultivable (pendiente < {_slope_thr}%)**")
+                st_folium(_maps["cultiv_map"], width=420, height=340,
+                          returned_objects=[], key="map_cultiv")
+                st.markdown(
+                    '<div style="display:flex;gap:1.5rem;margin-top:8px">'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#16a34a"></div>'
+                    f'<span style="font-size:0.82rem">Cultivable · {_s["area_cultivable_ha"]} ha ({_s["pct_cultivable"]}%)</span></div>'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#dc2626"></div>'
+                    f'<span style="font-size:0.82rem">No cultivable · {_s["area_no_cultivable_ha"]} ha ({100-_s["pct_cultivable"]:.1f}%)</span></div>'
+                    '</div>', unsafe_allow_html=True,
+                )
+
+            st.markdown("---")
+            st.markdown("**Distribución de clases de pendiente**")
+            _clases  = list(_s["slope_classes"].keys())
+            _valores = list(_s["slope_classes"].values())
+            _fig_cls = go.Figure(go.Bar(
+                x=_clases, y=_valores,
+                marker_color=["#2ecc71","#f1c40f","#e67e22","#e74c3c","#8e44ad"],
+                text=[f"{v:.1f}%" for v in _valores], textposition="outside",
+            ))
+            _fig_cls.update_layout(height=260, margin=dict(t=20,b=60,l=10,r=10),
+                                   yaxis=dict(title="% del área", range=[0,max(_valores)*1.2]),
+                                   xaxis=dict(tickangle=-20), showlegend=False)
+            st.plotly_chart(_fig_cls, use_container_width=True)
+            st.session_state["area_pendiente_excluida_ha"] = _s["area_no_cultivable_ha"]
+
+
+    @st.fragment
+    def _ndvi_fragment():
+        _pr = st.session_state.get("predio")
+        if _pr is None:
+            return
+        st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
+        st.caption(
+            "Sentinel-2 L2A COG · P25 real por píxel · 3 años de historia · "
+            "Filtro de nubosidad por SCL dentro del predio"
+        )
+
+        _ndvi_thr = st.slider(
+            "Umbral NDVI mínimo productivo",
+            min_value=0.10, max_value=0.60, value=0.25, step=0.05,
+            format="%.2f", key="ndvi_threshold",
+        )
+
+        if st.button("🔄 Calcular NDVI histórico (GEE)", type="primary", key="btn_ndvi"):
+            _prog_bar  = st.progress(0.0)
+            _prog_text = st.empty()
+
+            def _progress(done, total, msg):
+                _prog_bar.progress(min(done / max(total, 1), 1.0))
+                _prog_text.caption(msg)
+
+            _ok = False
+            try:
+                _res = get_ndvi_gee(
+                    _pr["gdf"],
+                    ndvi_threshold=_ndvi_thr,
+                    n_years=3,
+                    max_cloud_pct=20.0,
+                    progress_cb=_progress,
+                )
+                st.session_state["ndvi_result"]       = _res
+                st.session_state["area_ndvi_bajo_ha"] = _res["area_low_ha"]
+                st.session_state["ndvi_low_mask"]     = _res["low_ndvi_mask"]
+                _ok = True
+            except Exception as e:
+                st.error(f"❌ Error al obtener NDVI: {e}")
+            finally:
+                _prog_bar.empty()
+                _prog_text.empty()
+            if _ok:
+                st.rerun(scope="app")
+
+        _res = st.session_state.get("ndvi_result")
+        if _res is None:
+            st.info("Pulsa **Calcular NDVI histórico** para descargar datos de Sentinel-2.")
+        else:
+            _p25_sc = _res.get("ndvi_p25_mean")
+            _n_used = _res.get("n_scenes_used", _res.get("n_scenes", "—"))
+            _n_tot  = _res.get("n_scenes_total")
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: kpi("NDVI P25 medio",  f"{_p25_sc:.3f}" if _p25_sc is not None else "—")
+            with c2: kpi("NDVI P25 mínimo", f"{_res['ndvi_min']:.3f}" if _res['ndvi_min'] else "—")
+            with c3: kpi("NDVI P25 máximo", f"{_res['ndvi_max']:.3f}" if _res['ndvi_max'] else "—")
+            with c4: kpi("Escenas válidas",
+                         f"{_n_used}/{_n_tot}" if _n_tot else str(_n_used))
+            st.markdown("---")
+            c1,c2 = st.columns(2)
+            with c1:
+                st.markdown("**🛰️ NDVI histórico (P25 anual)**")
+                st_folium(_res["maps"]["ndvi_map"], width=420, height=340,
+                          returned_objects=[], key="map_ndvi")
+                st.markdown(_colorscale_bar(
+                    "NDVI", units="",
+                    colors=["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
+                    ticks=["-0.1","0.1","0.3","0.5","0.65","0.8+"],
+                ), unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"**🌱 Zona productiva (NDVI ≥ {_ndvi_thr:.2f})**")
+                st_folium(_res["maps"]["prod_map"], width=420, height=340,
+                          returned_objects=[], key="map_ndvi_prod")
+                st.markdown(
+                    '<div style="display:flex;gap:1.5rem;margin-top:8px">'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#16a34a"></div>'
+                    f'<span style="font-size:0.82rem">Productivo · NDVI ≥ {_ndvi_thr:.2f}</span></div>'
+                    '<div style="display:flex;align-items:center;gap:6px">'
+                    '<div style="width:16px;height:16px;border-radius:3px;background:#dc2626"></div>'
+                    f'<span style="font-size:0.82rem">Bajo umbral · {_res["area_low_ha"]} ha ({_res["pct_low"]}%)</span></div>'
+                    '</div>', unsafe_allow_html=True,
+                )
+            _scene_stats = _res.get("scene_stats") or _res.get("stats")
+            if _scene_stats:
+                df_ts  = pd.DataFrame(_scene_stats).sort_values("date")
+                _y_col = "mean_ndvi" if "mean_ndvi" in df_ts.columns else "median"
+                fig_ts = go.Figure()
+                fig_ts.add_trace(go.Scatter(
+                    x=df_ts["date"], y=df_ts[_y_col],
+                    mode="lines+markers", name="NDVI medio predio",
+                    line=dict(color="#16a34a", width=2), marker=dict(size=4),
                 ))
-                _fig_cls.update_layout(height=260, margin=dict(t=20,b=60,l=10,r=10),
-                                       yaxis=dict(title="% del área", range=[0,max(_valores)*1.2]),
-                                       xaxis=dict(tickangle=-20), showlegend=False)
-                st.plotly_chart(_fig_cls, use_container_width=True)
-                st.session_state["area_pendiente_excluida_ha"] = _s["area_no_cultivable_ha"]
+                fig_ts.add_hline(y=_ndvi_thr, line_dash="dash", line_color="#dc2626",
+                                 annotation_text=f"Umbral {_ndvi_thr:.2f}")
+                fig_ts.update_layout(
+                    title=f"Serie temporal NDVI medio en el predio · {len(df_ts)} escenas útiles",
+                    height=280, margin=dict(t=40,b=20),
+                    xaxis=dict(title="Fecha"),
+                    yaxis=dict(title="NDVI medio", range=[-0.1, 1.0]),
+                )
+                st.plotly_chart(fig_ts, use_container_width=True)
 
+            st.session_state["area_ndvi_bajo_ha"] = _res["area_low_ha"]
+            st.session_state["ndvi_low_mask"]     = _res["low_ndvi_mask"]
+
+
+    @st.fragment
+    def _area_ef_fragment():
+        from PIL import Image as _Im
+
+        _pr       = st.session_state.get("predio")
+        _d        = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
+        if _pr is None:
+            return
+
+        st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
+
+        _terrain  = st.session_state.get("terrain")
+        _ndvi_res = st.session_state.get("ndvi_result")
+        if _terrain is None and _ndvi_res is None:
+            st.info("Calcula primero el **Análisis del Terreno (A2-A)** y/o el **NDVI (A2-C)**.")
+            return
+
+        _missing = []
+        if _terrain  is None: _missing.append("Terreno (A2-A)")
+        if _ndvi_res is None: _missing.append("NDVI (A2-C)")
+        if _missing:
+            st.caption(f"ℹ️ Falta calcular: {', '.join(_missing)} — resultado será parcial.")
+
+        if st.button("🔄 Calcular Área Efectiva Cultivable", type="primary", key="btn_area_ef"):
+            st.session_state["area_ef_computed"] = True
+
+        if not st.session_state.get("area_ef_computed"):
+            st.info("Pulsa **Calcular Área Efectiva** para obtener el resultado.")
+            return
+
+        # ── Layer toggles ─────────────────────────────────────────────
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: ver_predio_a1 = st.checkbox("🟢 Predio",           value=True, key="a1_predio")
+        with c2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral", value=True, key="a1_pend")
+        with c3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",  value=True, key="a1_ndvi")
+        with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
+
+        area_total = _pr.get("area_ha", _d["area_total_ha"])
+        area_pend  = st.session_state.get("area_pendiente_excluida_ha", _d["area_pendiente_excluida_ha"])
+        area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
+        area_const = st.session_state.get("area_construcciones_ha",     _d["area_construcciones_ha"])
+        _slope_pct = st.session_state.get("slope_threshold",  25)
+        _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
+        _gdf_const = st.session_state.get("gdf_construcciones")
+        _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
+        _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
+        _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
+
+        # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
+        if _n_mask is not None:
+            _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
+            h, w     = _n_mask.shape
+            n_predio = max(int(_pmask.sum()), 1)
+
+            _union    = _n_mask.copy()
+            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
+
+            if _s_mask is not None:
+                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                        .resize((w, h), _Im.NEAREST)).astype(bool)
+                _union    = _union | _sr
+                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
+
+            _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
+            _has_b = False
+            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
+                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
+                _union     = _union | _b_mask
+                _has_b     = True
+                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
+
+            layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
+            if _has_b:
+                layers.append("construcciones")
+            metodo = "exacto (unión " + " + ".join(layers) + ")"
+
+            n_excluido    = int((_union & _pmask).sum())
+            area_excluida = float(n_excluido / n_predio * area_total)
+
+        elif _s_mask is not None:
+            _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
+            n_predio_s    = max(int(_pmask_s.sum()), 1)
+            area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
+            area_excluida = area_pend + area_const
+            metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
+        else:
+            area_excluida = area_pend + area_ndvi + area_const
+            metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
+
+        area_ef = round(max(area_total - area_excluida, 0), 2)
+        pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+
+        # ── Map ───────────────────────────────────────────────────────
+        m_a1 = _base_map(_pr["gdf"])
+        if ver_predio_a1: _add_predio(m_a1, _pr["gdf"])
+        if ver_pendiente and _terrain is not None and _s_bounds is not None:
+            slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
+            bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
+            folium.raster_layers.ImageOverlay(
+                image=slope_png, bounds=bx_s, opacity=1.0,
+                name=f"Pendiente >{_slope_pct}%",
+            ).add_to(m_a1)
+        if ver_ndvi_bajo and _n_mask is not None:
+            _ndvi_bounds = _ndvi_res.get("bounds_wgs84") if _ndvi_res else None
+            if _ndvi_bounds is None:
+                _ndvi_bounds = _pr["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
+            ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
+            bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
+            folium.raster_layers.ImageOverlay(
+                image=ndvi_png, bounds=bx_n, opacity=1.0,
+                name=f"NDVI < {_ndvi_thr:.2f}",
+            ).add_to(m_a1)
+        if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
+            folium.GeoJson(
+                data=_gdf_const.to_json(),
+                style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
+                                           "weight":1.5,"fillOpacity":0.70},
+                tooltip="Construcción",
+            ).add_to(m_a1)
+        _fit(m_a1, _pr["gdf"])
+        st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
+
+        # ── Table + gauge ─────────────────────────────────────────────
+        c_left, c_right = st.columns([2, 1])
+        with c_left:
+            solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
+            _componentes = ["Área total del predio",
+                            f"− Pendiente >{_slope_pct}% (A2-A)",
+                            f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
+                            "− Construcciones (A2-B)"]
+            _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
+            if solapamiento > 0:
+                _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
+                _hectareas.append(solapamiento)
+            _componentes.append("✅ Área efectiva cultivable")
+            _hectareas.append(area_ef)
+            df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
+            st.dataframe(
+                df_area.style.apply(lambda x: [
+                    "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
+                    "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
+                    for v in x], axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        with c_right:
+            st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
+            kpi("Área efectiva", area_ef, "ha")
+
+        st.session_state["area_ef_result"] = {
+            "area_ef":   area_ef,
+            "pct_ef":    pct_ef,
+            "area_pend": area_pend,
+            "area_ndvi": area_ndvi,
+            "area_const": area_const,
+            "slope_pct": _slope_pct,
+            "ndvi_thr":  _ndvi_thr,
+        }
+
+
+    with st.expander("📐 A2A · Análisis del Terreno", expanded=True):
         _terrain_fragment()
 
-        st.markdown("---")
+    with st.expander("🏗️ A2B · Análisis de Construcciones", expanded=True):
 
         st.markdown("#### 🏗️ A2-B · Análisis de Construcciones")
         with st.spinner("Cargando construcciones..."):
@@ -811,277 +1082,11 @@ with tab_validacion:
         st.session_state["area_construcciones_ha"] = (
             area_const_real if gdf_const is not None else 0.0)
 
-        st.markdown("---")
 
-        @st.fragment
-        def _ndvi_fragment():
-            _pr = st.session_state.get("predio")
-            if _pr is None:
-                return
-            st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
-            st.caption(
-                "Sentinel-2 L2A COG · P25 real por píxel · 3 años de historia · "
-                "Filtro de nubosidad por SCL dentro del predio"
-            )
-
-            _ndvi_thr = st.slider(
-                "Umbral NDVI mínimo productivo",
-                min_value=0.10, max_value=0.60, value=0.25, step=0.05,
-                format="%.2f", key="ndvi_threshold",
-            )
-
-            if st.button("🔄 Calcular NDVI histórico (GEE)", type="primary", key="btn_ndvi"):
-                _prog_bar  = st.progress(0.0)
-                _prog_text = st.empty()
-
-                def _progress(done, total, msg):
-                    _prog_bar.progress(min(done / max(total, 1), 1.0))
-                    _prog_text.caption(msg)
-
-                _ok = False
-                try:
-                    _res = get_ndvi_gee(
-                        _pr["gdf"],
-                        ndvi_threshold=_ndvi_thr,
-                        n_years=3,
-                        max_cloud_pct=20.0,
-                        progress_cb=_progress,
-                    )
-                    st.session_state["ndvi_result"]       = _res
-                    st.session_state["area_ndvi_bajo_ha"] = _res["area_low_ha"]
-                    st.session_state["ndvi_low_mask"]     = _res["low_ndvi_mask"]
-                    _ok = True
-                except Exception as e:
-                    st.error(f"❌ Error al obtener NDVI: {e}")
-                finally:
-                    _prog_bar.empty()
-                    _prog_text.empty()
-                if _ok:
-                    st.rerun(scope="app")
-
-            _res = st.session_state.get("ndvi_result")
-            if _res is None:
-                st.info("Pulsa **Calcular NDVI histórico** para descargar datos de Sentinel-2.")
-            else:
-                _p25_sc = _res.get("ndvi_p25_mean")
-                _n_used = _res.get("n_scenes_used", _res.get("n_scenes", "—"))
-                _n_tot  = _res.get("n_scenes_total")
-                c1,c2,c3,c4 = st.columns(4)
-                with c1: kpi("NDVI P25 medio",  f"{_p25_sc:.3f}" if _p25_sc is not None else "—")
-                with c2: kpi("NDVI P25 mínimo", f"{_res['ndvi_min']:.3f}" if _res['ndvi_min'] else "—")
-                with c3: kpi("NDVI P25 máximo", f"{_res['ndvi_max']:.3f}" if _res['ndvi_max'] else "—")
-                with c4: kpi("Escenas válidas",
-                             f"{_n_used}/{_n_tot}" if _n_tot else str(_n_used))
-                st.markdown("---")
-                c1,c2 = st.columns(2)
-                with c1:
-                    st.markdown("**🛰️ NDVI histórico (P25 anual)**")
-                    st_folium(_res["maps"]["ndvi_map"], width=420, height=340,
-                              returned_objects=[], key="map_ndvi")
-                    st.markdown(_colorscale_bar(
-                        "NDVI", units="",
-                        colors=["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
-                        ticks=["-0.1","0.1","0.3","0.5","0.65","0.8+"],
-                    ), unsafe_allow_html=True)
-                with c2:
-                    st.markdown(f"**🌱 Zona productiva (NDVI ≥ {_ndvi_thr:.2f})**")
-                    st_folium(_res["maps"]["prod_map"], width=420, height=340,
-                              returned_objects=[], key="map_ndvi_prod")
-                    st.markdown(
-                        '<div style="display:flex;gap:1.5rem;margin-top:8px">'
-                        '<div style="display:flex;align-items:center;gap:6px">'
-                        '<div style="width:16px;height:16px;border-radius:3px;background:#16a34a"></div>'
-                        f'<span style="font-size:0.82rem">Productivo · NDVI ≥ {_ndvi_thr:.2f}</span></div>'
-                        '<div style="display:flex;align-items:center;gap:6px">'
-                        '<div style="width:16px;height:16px;border-radius:3px;background:#dc2626"></div>'
-                        f'<span style="font-size:0.82rem">Bajo umbral · {_res["area_low_ha"]} ha ({_res["pct_low"]}%)</span></div>'
-                        '</div>', unsafe_allow_html=True,
-                    )
-                _scene_stats = _res.get("scene_stats") or _res.get("stats")
-                if _scene_stats:
-                    df_ts  = pd.DataFrame(_scene_stats).sort_values("date")
-                    _y_col = "mean_ndvi" if "mean_ndvi" in df_ts.columns else "median"
-                    fig_ts = go.Figure()
-                    fig_ts.add_trace(go.Scatter(
-                        x=df_ts["date"], y=df_ts[_y_col],
-                        mode="lines+markers", name="NDVI medio predio",
-                        line=dict(color="#16a34a", width=2), marker=dict(size=4),
-                    ))
-                    fig_ts.add_hline(y=_ndvi_thr, line_dash="dash", line_color="#dc2626",
-                                     annotation_text=f"Umbral {_ndvi_thr:.2f}")
-                    fig_ts.update_layout(
-                        title=f"Serie temporal NDVI medio en el predio · {len(df_ts)} escenas útiles",
-                        height=280, margin=dict(t=40,b=20),
-                        xaxis=dict(title="Fecha"),
-                        yaxis=dict(title="NDVI medio", range=[-0.1, 1.0]),
-                    )
-                    st.plotly_chart(fig_ts, use_container_width=True)
-
-                st.session_state["area_ndvi_bajo_ha"] = _res["area_low_ha"]
-                st.session_state["ndvi_low_mask"]     = _res["low_ndvi_mask"]
-
+    with st.expander("🛰️ A2C · Análisis de Actividad Productiva (NDVI)", expanded=True):
         _ndvi_fragment()
 
-        st.markdown("---")
-
-        @st.fragment
-        def _area_ef_fragment():
-            from PIL import Image as _Im
-
-            _pr       = st.session_state.get("predio")
-            _d        = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-            if _pr is None:
-                return
-
-            st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
-
-            _terrain  = st.session_state.get("terrain")
-            _ndvi_res = st.session_state.get("ndvi_result")
-            if _terrain is None and _ndvi_res is None:
-                st.info("Calcula primero el **Análisis del Terreno (A2-A)** y/o el **NDVI (A2-C)**.")
-                return
-
-            _missing = []
-            if _terrain  is None: _missing.append("Terreno (A2-A)")
-            if _ndvi_res is None: _missing.append("NDVI (A2-C)")
-            if _missing:
-                st.caption(f"ℹ️ Falta calcular: {', '.join(_missing)} — resultado será parcial.")
-
-            if st.button("🔄 Calcular Área Efectiva Cultivable", type="primary", key="btn_area_ef"):
-                st.session_state["area_ef_computed"] = True
-
-            if not st.session_state.get("area_ef_computed"):
-                st.info("Pulsa **Calcular Área Efectiva** para obtener el resultado.")
-                return
-
-            # ── Layer toggles ─────────────────────────────────────────────
-            c1,c2,c3,c4 = st.columns(4)
-            with c1: ver_predio_a1 = st.checkbox("🟢 Predio",           value=True, key="a1_predio")
-            with c2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral", value=True, key="a1_pend")
-            with c3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",  value=True, key="a1_ndvi")
-            with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
-
-            area_total = _pr.get("area_ha", _d["area_total_ha"])
-            area_pend  = st.session_state.get("area_pendiente_excluida_ha", _d["area_pendiente_excluida_ha"])
-            area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
-            area_const = st.session_state.get("area_construcciones_ha",     _d["area_construcciones_ha"])
-            _slope_pct = st.session_state.get("slope_threshold",  25)
-            _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
-            _gdf_const = st.session_state.get("gdf_construcciones")
-            _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
-            _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
-            _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
-
-            # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
-            if _n_mask is not None:
-                _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
-                h, w     = _n_mask.shape
-                n_predio = max(int(_pmask.sum()), 1)
-
-                _union    = _n_mask.copy()
-                area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
-
-                if _s_mask is not None:
-                    _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                            .resize((w, h), _Im.NEAREST)).astype(bool)
-                    _union    = _union | _sr
-                    area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
-
-                _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
-                _has_b = False
-                if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                    _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                    _union     = _union | _b_mask
-                    _has_b     = True
-                    area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
-
-                layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
-                if _has_b:
-                    layers.append("construcciones")
-                metodo = "exacto (unión " + " + ".join(layers) + ")"
-
-                n_excluido    = int((_union & _pmask).sum())
-                area_excluida = float(n_excluido / n_predio * area_total)
-
-            elif _s_mask is not None:
-                _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
-                n_predio_s    = max(int(_pmask_s.sum()), 1)
-                area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
-                area_excluida = area_pend + area_const
-                metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
-            else:
-                area_excluida = area_pend + area_ndvi + area_const
-                metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
-
-            area_ef = round(max(area_total - area_excluida, 0), 2)
-            pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
-
-            # ── Map ───────────────────────────────────────────────────────
-            m_a1 = _base_map(_pr["gdf"])
-            if ver_predio_a1: _add_predio(m_a1, _pr["gdf"])
-            if ver_pendiente and _terrain is not None and _s_bounds is not None:
-                slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
-                bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
-                folium.raster_layers.ImageOverlay(
-                    image=slope_png, bounds=bx_s, opacity=1.0,
-                    name=f"Pendiente >{_slope_pct}%",
-                ).add_to(m_a1)
-            if ver_ndvi_bajo and _n_mask is not None:
-                _ndvi_bounds = _ndvi_res.get("bounds_wgs84") if _ndvi_res else None
-                if _ndvi_bounds is None:
-                    _ndvi_bounds = _pr["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
-                ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
-                bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
-                folium.raster_layers.ImageOverlay(
-                    image=ndvi_png, bounds=bx_n, opacity=1.0,
-                    name=f"NDVI < {_ndvi_thr:.2f}",
-                ).add_to(m_a1)
-            if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
-                folium.GeoJson(
-                    data=_gdf_const.to_json(),
-                    style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
-                                               "weight":1.5,"fillOpacity":0.70},
-                    tooltip="Construcción",
-                ).add_to(m_a1)
-            _fit(m_a1, _pr["gdf"])
-            st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
-
-            # ── Table + gauge ─────────────────────────────────────────────
-            c_left, c_right = st.columns([2, 1])
-            with c_left:
-                solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
-                _componentes = ["Área total del predio",
-                                f"− Pendiente >{_slope_pct}% (A2-A)",
-                                f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
-                                "− Construcciones (A2-B)"]
-                _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
-                if solapamiento > 0:
-                    _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
-                    _hectareas.append(solapamiento)
-                _componentes.append("✅ Área efectiva cultivable")
-                _hectareas.append(area_ef)
-                df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
-                st.dataframe(
-                    df_area.style.apply(lambda x: [
-                        "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
-                        "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
-                        for v in x], axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            with c_right:
-                st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
-                kpi("Área efectiva", area_ef, "ha")
-
-            st.session_state["area_ef_result"] = {
-                "area_ef":   area_ef,
-                "pct_ef":    pct_ef,
-                "area_pend": area_pend,
-                "area_ndvi": area_ndvi,
-                "area_const": area_const,
-                "slope_pct": _slope_pct,
-                "ndvi_thr":  _ndvi_thr,
-            }
-
+    with st.expander("📊 A2 · Área Efectiva Cultivable", expanded=True):
         _area_ef_fragment()
 
     # ════════════════════════════════════════════════════════════════════
