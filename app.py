@@ -680,7 +680,6 @@ with tab_validacion:
         )
 
         if st.button("🔄 Calcular terreno", type="primary", key="btn_terrain"):
-            st.session_state["terrain"] = None
             with st.spinner("Descargando DEM y calculando terreno..."):
                 try:
                     terrain = get_terrain_analysis(predio["gdf"], float(slope_threshold_pct))
@@ -815,7 +814,6 @@ with tab_validacion:
         )
 
         if st.button("🔄 Calcular NDVI histórico (GEE)", type="primary", key="btn_ndvi"):
-            st.session_state["ndvi_result"] = None
             _prog_bar  = st.progress(0.0)
             _prog_text = st.empty()
 
@@ -925,40 +923,43 @@ with tab_validacion:
         from PIL import Image as _Im
 
         if _n_mask is not None:
-            # NDVI grid is the reference — GEE provides an accurate predio pixel mask
-            _pmask = ~np.isnan(_ndvi_res["ndvi_p25"])   # True inside predio
-            h, w   = _n_mask.shape
-            _union = _n_mask.copy()
+            # NDVI grid is the reference — all areas derived from same pixel base × area_total
+            _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])   # True inside predio
+            h, w     = _n_mask.shape
+            n_predio = max(int(_pmask.sum()), 1)
+
+            _union   = _n_mask.copy()
+            # Recompute area_ndvi from pixel fraction (consistent base)
+            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
 
             if _s_mask is not None:
-                # Resize slope mask to NDVI grid
-                _sr    = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                    .resize((w, h), _Im.NEAREST)).astype(bool)
-                _union = _union | _sr
+                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                        .resize((w, h), _Im.NEAREST)).astype(bool)
+                _union    = _union | _sr
+                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
 
-            _has_b = False
             _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
+            _has_b = False
             if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                _union  = _union | _b_mask
-                _has_b  = True
+                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
+                _union     = _union | _b_mask
+                _has_b     = True
+                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
 
             layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
             if _has_b:
                 layers.append("construcciones")
             metodo = "exacto (unión " + " + ".join(layers) + ")"
 
-            # Area = fraction of predio pixels that are non-cultivable × total area
-            n_predio      = max(int(_pmask.sum()), 1)
             n_excluido    = int((_union & _pmask).sum())
             area_excluida = float(n_excluido / n_predio * area_total)
 
         elif _s_mask is not None:
-            # Only slope mask available — use it with area_const added separately
-            h, w          = _s_mask.shape
-            _union        = _s_mask.copy()
-            _has_b        = False
-            area_excluida = float(_union.sum() / max(_union.size, 1) * area_total) + area_const
+            # Only slope mask — use predio pixel count as denominator, not total array size
+            _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
+            n_predio_s    = max(int(_pmask_s.sum()), 1)
+            area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
+            area_excluida = area_pend + area_const
             metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
         else:
             area_excluida = area_pend + area_ndvi + area_const
