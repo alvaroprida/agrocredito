@@ -146,11 +146,11 @@ def _query_predio_real(lat, lon):
     sql = text("""
         SELECT
             codigo,
-            COALESCE(departamento, '—')             AS departamento,
-            COALESCE(ROUND(area_ha::numeric, 2), 0) AS area_ha,
-            ST_AsGeoJSON(geom)::json                AS geojson
-        FROM predios_mvp
-        WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326))
+            COALESCE(departamento, '—')                      AS departamento,
+            COALESCE(ROUND(area_ha::numeric, 2), 0)          AS area_ha,
+            ST_AsGeoJSON(wkb_geometry)::json                 AS geojson
+        FROM predios
+        WHERE ST_Contains(wkb_geometry, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326))
         LIMIT 1
     """)
     with _get_engine().connect() as conn:
