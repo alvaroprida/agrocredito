@@ -924,129 +924,165 @@ with tab_validacion:
 
         st.markdown("---")
 
-        st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
-        c1,c2,c3,c4 = st.columns(4)
-        with c1: ver_predio_a1 = st.checkbox("🟢 Predio",           value=True, key="a1_predio")
-        with c2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral", value=True, key="a1_pend")
-        with c3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",  value=True, key="a1_ndvi")
-        with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
+        @st.fragment
+        def _area_ef_fragment():
+            from PIL import Image as _Im
 
-        area_total = predio.get("area_ha", d["area_total_ha"])
-        area_pend  = st.session_state.get("area_pendiente_excluida_ha", d["area_pendiente_excluida_ha"])
-        area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
-        area_const = st.session_state.get("area_construcciones_ha",     d["area_construcciones_ha"])
-        _slope_pct = st.session_state.get("slope_threshold",  25)
-        _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
-        _terrain   = st.session_state.get("terrain")
-        _ndvi_res  = st.session_state.get("ndvi_result")
-        _gdf_const = st.session_state.get("gdf_construcciones")
-        _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
-        _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
-        _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
+            _pr       = st.session_state.get("predio")
+            _d        = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
+            if _pr is None:
+                return
 
-        # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
-        from PIL import Image as _Im
+            st.markdown("#### 📊 Resultado: Área Efectiva Cultivable")
 
-        if _n_mask is not None:
-            # NDVI grid is the reference — all areas derived from same pixel base × area_total
-            _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])   # True inside predio
-            h, w     = _n_mask.shape
-            n_predio = max(int(_pmask.sum()), 1)
+            _terrain  = st.session_state.get("terrain")
+            _ndvi_res = st.session_state.get("ndvi_result")
+            if _terrain is None and _ndvi_res is None:
+                st.info("Calcula primero el **Análisis del Terreno (A2-A)** y/o el **NDVI (A2-C)**.")
+                return
 
-            _union   = _n_mask.copy()
-            # Recompute area_ndvi from pixel fraction (consistent base)
-            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
+            _missing = []
+            if _terrain  is None: _missing.append("Terreno (A2-A)")
+            if _ndvi_res is None: _missing.append("NDVI (A2-C)")
+            if _missing:
+                st.caption(f"ℹ️ Falta calcular: {', '.join(_missing)} — resultado será parcial.")
 
-            if _s_mask is not None:
-                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                        .resize((w, h), _Im.NEAREST)).astype(bool)
-                _union    = _union | _sr
-                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
+            if st.button("🔄 Calcular Área Efectiva Cultivable", type="primary", key="btn_area_ef"):
+                st.session_state["area_ef_computed"] = True
 
-            _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
-            _has_b = False
-            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                _union     = _union | _b_mask
-                _has_b     = True
-                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
+            if not st.session_state.get("area_ef_computed"):
+                st.info("Pulsa **Calcular Área Efectiva** para obtener el resultado.")
+                return
 
-            layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
-            if _has_b:
-                layers.append("construcciones")
-            metodo = "exacto (unión " + " + ".join(layers) + ")"
+            # ── Layer toggles ─────────────────────────────────────────────
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: ver_predio_a1 = st.checkbox("🟢 Predio",           value=True, key="a1_predio")
+            with c2: ver_pendiente = st.checkbox("🔴 Pendiente >umbral", value=True, key="a1_pend")
+            with c3: ver_ndvi_bajo = st.checkbox("🟡 NDVI bajo umbral",  value=True, key="a1_ndvi")
+            with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
 
-            n_excluido    = int((_union & _pmask).sum())
-            area_excluida = float(n_excluido / n_predio * area_total)
+            area_total = _pr.get("area_ha", _d["area_total_ha"])
+            area_pend  = st.session_state.get("area_pendiente_excluida_ha", _d["area_pendiente_excluida_ha"])
+            area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
+            area_const = st.session_state.get("area_construcciones_ha",     _d["area_construcciones_ha"])
+            _slope_pct = st.session_state.get("slope_threshold",  25)
+            _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
+            _gdf_const = st.session_state.get("gdf_construcciones")
+            _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
+            _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
+            _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
-        elif _s_mask is not None:
-            # Only slope mask — use predio pixel count as denominator, not total array size
-            _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
-            n_predio_s    = max(int(_pmask_s.sum()), 1)
-            area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
-            area_excluida = area_pend + area_const
-            metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
-        else:
-            area_excluida = area_pend + area_ndvi + area_const
-            metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
+            # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
+            if _n_mask is not None:
+                _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
+                h, w     = _n_mask.shape
+                n_predio = max(int(_pmask.sum()), 1)
 
-        area_ef = round(max(area_total - area_excluida, 0), 2)
-        pct_ef  = round(area_ef/area_total*100) if area_total > 0 else 0
+                _union    = _n_mask.copy()
+                area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
 
-        m_a1 = _base_map(predio["gdf"])
-        if ver_predio_a1: _add_predio(m_a1, predio["gdf"])
-        if ver_pendiente and _terrain is not None and _s_bounds is not None:
-            slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
-            bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
-            folium.raster_layers.ImageOverlay(
-                image=slope_png, bounds=bx_s, opacity=1.0,
-                name=f"Pendiente >{_slope_pct}%",
-            ).add_to(m_a1)
-        if ver_ndvi_bajo and _n_mask is not None:
-            _ndvi_bounds = (_ndvi_res.get("bounds_wgs84")
-                            if _ndvi_res else None)
-            if _ndvi_bounds is None:
-                _ndvi_bounds = predio["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
-            ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
-            bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
-            folium.raster_layers.ImageOverlay(
-                image=ndvi_png, bounds=bx_n, opacity=1.0,
-                name=f"NDVI < {_ndvi_thr:.2f}",
-            ).add_to(m_a1)
-        if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
-            folium.GeoJson(
-                data=_gdf_const.to_json(),
-                style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
-                                           "weight":1.5,"fillOpacity":0.70},
-                tooltip="Construcción",
-            ).add_to(m_a1)
-        _fit(m_a1, predio["gdf"])
-        st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
+                if _s_mask is not None:
+                    _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                            .resize((w, h), _Im.NEAREST)).astype(bool)
+                    _union    = _union | _sr
+                    area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
 
-        c_left, c_right = st.columns([2,1])
-        with c_left:
-            solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
-            _componentes = ["Área total del predio",
-                            f"− Pendiente >{_slope_pct}% (A2-A)",
-                            f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
-                            "− Construcciones (A2-B)"]
-            _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
-            if solapamiento > 0:
-                _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
-                _hectareas.append(solapamiento)
-            _componentes.append("✅ Área efectiva cultivable")
-            _hectareas.append(area_ef)
-            df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
-            st.dataframe(
-                df_area.style.apply(lambda x: [
-                    "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
-                    "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
-                    for v in x], axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        with c_right:
-            st.plotly_chart(gauge_riesgo(pct_ef,"% Área efectiva"), use_container_width=True)
-            kpi("Área efectiva", area_ef, "ha")
+                _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
+                _has_b = False
+                if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
+                    _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
+                    _union     = _union | _b_mask
+                    _has_b     = True
+                    area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
+
+                layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
+                if _has_b:
+                    layers.append("construcciones")
+                metodo = "exacto (unión " + " + ".join(layers) + ")"
+
+                n_excluido    = int((_union & _pmask).sum())
+                area_excluida = float(n_excluido / n_predio * area_total)
+
+            elif _s_mask is not None:
+                _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
+                n_predio_s    = max(int(_pmask_s.sum()), 1)
+                area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
+                area_excluida = area_pend + area_const
+                metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
+            else:
+                area_excluida = area_pend + area_ndvi + area_const
+                metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
+
+            area_ef = round(max(area_total - area_excluida, 0), 2)
+            pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+
+            # ── Map ───────────────────────────────────────────────────────
+            m_a1 = _base_map(_pr["gdf"])
+            if ver_predio_a1: _add_predio(m_a1, _pr["gdf"])
+            if ver_pendiente and _terrain is not None and _s_bounds is not None:
+                slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
+                bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
+                folium.raster_layers.ImageOverlay(
+                    image=slope_png, bounds=bx_s, opacity=1.0,
+                    name=f"Pendiente >{_slope_pct}%",
+                ).add_to(m_a1)
+            if ver_ndvi_bajo and _n_mask is not None:
+                _ndvi_bounds = _ndvi_res.get("bounds_wgs84") if _ndvi_res else None
+                if _ndvi_bounds is None:
+                    _ndvi_bounds = _pr["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
+                ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
+                bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
+                folium.raster_layers.ImageOverlay(
+                    image=ndvi_png, bounds=bx_n, opacity=1.0,
+                    name=f"NDVI < {_ndvi_thr:.2f}",
+                ).add_to(m_a1)
+            if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
+                folium.GeoJson(
+                    data=_gdf_const.to_json(),
+                    style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
+                                               "weight":1.5,"fillOpacity":0.70},
+                    tooltip="Construcción",
+                ).add_to(m_a1)
+            _fit(m_a1, _pr["gdf"])
+            st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
+
+            # ── Table + gauge ─────────────────────────────────────────────
+            c_left, c_right = st.columns([2, 1])
+            with c_left:
+                solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
+                _componentes = ["Área total del predio",
+                                f"− Pendiente >{_slope_pct}% (A2-A)",
+                                f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
+                                "− Construcciones (A2-B)"]
+                _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
+                if solapamiento > 0:
+                    _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
+                    _hectareas.append(solapamiento)
+                _componentes.append("✅ Área efectiva cultivable")
+                _hectareas.append(area_ef)
+                df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
+                st.dataframe(
+                    df_area.style.apply(lambda x: [
+                        "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
+                        "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
+                        for v in x], axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+            with c_right:
+                st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
+                kpi("Área efectiva", area_ef, "ha")
+
+            st.session_state["area_ef_result"] = {
+                "area_ef":   area_ef,
+                "pct_ef":    pct_ef,
+                "area_pend": area_pend,
+                "area_ndvi": area_ndvi,
+                "area_const": area_const,
+                "slope_pct": _slope_pct,
+                "ndvi_thr":  _ndvi_thr,
+            }
+
+        _area_ef_fragment()
 
     # ════════════════════════════════════════════════════════════════════
     #  B · CONTINUIDAD PRODUCTIVA
@@ -1705,8 +1741,13 @@ with tab_validacion:
     else:
         _res_a1 = "—"
 
-    _sem_a2 = "verde" if pct_ef >= 70 else "amarillo" if pct_ef >= 40 else "rojo"
-    _res_a2 = f"{area_ef} ha ({pct_ef:.0f}% del predio)"
+    _a2r    = st.session_state.get("area_ef_result", {})
+    _a2_pct = _a2r.get("pct_ef", None)
+    _a2_ha  = _a2r.get("area_ef", None)
+    _sem_a2 = ("verde" if _a2_pct is not None and _a2_pct >= 70 else
+               "amarillo" if _a2_pct is not None and _a2_pct >= 40 else
+               "rojo" if _a2_pct is not None else "gris")
+    _res_a2 = f"{_a2_ha} ha ({_a2_pct:.0f}% del predio)" if _a2_pct is not None else "—"
 
     _apt_cat   = (_apt_res.get("category") if _apt_res and not _apt_res.get("error") else None)
     _apt_score = (_apt_res.get("score")    if _apt_res and not _apt_res.get("error") else None)
@@ -1815,13 +1856,13 @@ with tab_validacion:
                     _pdf_analisis = {
                         "a1_nivel":     st.session_state.get("a1_nivel", "gris"),
                         "gdf_frontera": st.session_state.get("gdf_frontera"),
-                        "area_ef":      area_ef,
-                        "pct_ef":       pct_ef,
-                        "area_pend":    area_pend,
-                        "area_ndvi":    area_ndvi,
-                        "area_const":   area_const,
-                        "slope_thr":    _slope_pct,
-                        "ndvi_thr":     _ndvi_thr,
+                        "area_ef":      st.session_state.get("area_ef_result", {}).get("area_ef", 0),
+                        "pct_ef":       st.session_state.get("area_ef_result", {}).get("pct_ef", 0),
+                        "area_pend":    st.session_state.get("area_ef_result", {}).get("area_pend", 0),
+                        "area_ndvi":    st.session_state.get("area_ef_result", {}).get("area_ndvi", 0),
+                        "area_const":   st.session_state.get("area_ef_result", {}).get("area_const", 0),
+                        "slope_thr":    st.session_state.get("area_ef_result", {}).get("slope_pct", 25),
+                        "ndvi_thr":     st.session_state.get("area_ef_result", {}).get("ndvi_thr", 0.25),
                         "apt_result":   apt_result if "apt_result" in dir() else None,
                         "b2_result":    st.session_state.get("b2_result"),
                         "infra_centro": infra_centro,
