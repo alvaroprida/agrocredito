@@ -57,7 +57,7 @@ from utils.risk_indicators  import (
     score_to_label, score_to_color, aggregate_risk_score,
 )
 from utils.eosda_terrain  import get_terrain_analysis
-from utils.stac_ndvi      import get_ndvi_stac
+from utils.gee_ndvi       import get_ndvi_gee
 from utils.eosda_ndvi     import get_productivity_analysis
 from utils.risk_scoring   import (
     score_riesgo, INDICADORES, GRUPOS,
@@ -824,7 +824,7 @@ with tab_validacion:
                 _prog_text.caption(msg)
 
             try:
-                ndvi_result = get_ndvi_stac(
+                ndvi_result = get_ndvi_gee(
                     predio["gdf"],
                     ndvi_threshold=ndvi_threshold,
                     n_years=3,
