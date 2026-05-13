@@ -778,6 +778,12 @@ with tab_validacion:
                                    xaxis=dict(tickangle=-20), showlegend=False)
             st.plotly_chart(_fig_cls, use_container_width=True)
             st.session_state["area_pendiente_excluida_ha"] = _s["area_no_cultivable_ha"]
+            st.caption(
+                "ℹ️ El área mostrada aquí usa la resolución nativa del DEM (~30 m). "
+                "En la tabla de Área Efectiva (A2) todos los componentes se recomputan "
+                "sobre el grid de 10 m del NDVI para garantizar coherencia — "
+                "los valores pueden diferir ligeramente."
+            )
 
 
     @st.fragment
@@ -937,28 +943,36 @@ with tab_validacion:
         _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
         # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
-        # area_pend/area_ndvi/area_const come from their own analyses (shown in A2A/A2C)
-        # area_excluida is computed from the pixel union — only this drives the final result
+        # When NDVI mask is available, ALL components are recomputed on the SAME
+        # NDVI 10m grid so that area_pend + area_ndvi + area_const - solapamiento
+        # = area_excluida exactly (no spurious overlap from mismatched grids).
         if _n_mask is not None:
             _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
             h, w     = _n_mask.shape
             n_predio = max(int(_pmask.sum()), 1)
 
+            # NDVI component on NDVI grid
+            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
+
             _union = _n_mask.copy()
             if _s_mask is not None:
-                _sr    = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                    .resize((w, h), _Im.NEAREST)).astype(bool)
-                _union = _union | _sr
+                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                       .resize((w, h), _Im.NEAREST)).astype(bool)
+                # Slope component on NDVI grid
+                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
+                _union    = _union | _sr
 
             _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
             if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                _union  = _union | _b_mask
+                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
+                # Buildings component on NDVI grid
+                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
+                _union     = _union | _b_mask
 
             layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
             if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
                 layers.append("construcciones")
-            metodo = "exacto (unión " + " + ".join(layers) + ")"
+            metodo = "exacto (unión " + " + ".join(layers) + ", grid 10 m)"
 
             n_excluido    = int((_union & _pmask).sum())
             area_excluida = float(n_excluido / n_predio * area_total)
