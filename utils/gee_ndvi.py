@@ -216,19 +216,26 @@ def get_ndvi_gee(
     ndvi_p25_img = s2.reduce(ee.Reducer.percentile([25])).rename("NDVI_P25")
     ndvi_med_img = s2.reduce(ee.Reducer.median()).rename("NDVI_median")
 
-    # Scene-level time series (mean NDVI per date, for the chart)
-    s2_with_stats = s2.map(lambda img: img.set(
-        "mean_ndvi", img.reduceRegion(
-            reducer=ee.Reducer.mean(), geometry=roi,
-            scale=res_m, maxPixels=1e8,
-        ).get("NDVI"),
-        "date_str", img.date().format("YYYY-MM-dd"),
-    ))
-    means_list = s2_with_stats.aggregate_array("mean_ndvi").getInfo()
-    dates_list = s2_with_stats.aggregate_array("date_str").getInfo()
+    # Monthly mean NDVI time series — one getInfo() call, computed server-side
+    if progress_cb:
+        progress_cb(2, 5, f"Calculando serie temporal mensual ({n_years * 12} meses)…")
+
+    def _monthly_mean(m_offset):
+        m_offset = ee.Number(m_offset)
+        start    = ee.Date(date_start).advance(m_offset, "month")
+        end      = start.advance(1, "month")
+        mean_val = (s2.filterDate(start, end).mean()
+                      .reduceRegion(ee.Reducer.mean(), roi, res_m, maxPixels=1e8)
+                      .get("NDVI"))
+        return ee.Feature(None, {"date": start.format("YYYY-MM-01"), "mean_ndvi": mean_val})
+
+    monthly_fc  = ee.FeatureCollection(
+        ee.List.sequence(0, n_years * 12 - 1).map(_monthly_mean)
+    )
+    monthly_raw = monthly_fc.getInfo()["features"]
     scene_stats = sorted(
-        [{"date": d, "mean_ndvi": float(m)}
-         for d, m in zip(dates_list, means_list) if m is not None],
+        [{"date": f["properties"]["date"], "mean_ndvi": float(f["properties"]["mean_ndvi"])}
+         for f in monthly_raw if f["properties"].get("mean_ndvi") is not None],
         key=lambda x: x["date"],
     )
 
