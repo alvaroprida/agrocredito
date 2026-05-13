@@ -195,6 +195,8 @@ MOCK_NDVI = {"ndvi_promedio": 0.71, "area_ndvi_bajo_ha": 0.6, "umbral_ndvi": 0.4
 COLOR_SEMAFORO   = {"verde":"semaforo-verde","naranja":"semaforo-naranja","rojo":"semaforo-rojo"}
 COLORES_FRONTERA = {
     "Frontera Agrícola no condicionada":              "#16a34a",
+    "No condicionada":                                "#16a34a",
+    "Condicionada":                                   "#d97706",
     "Ambiental":                                      "#d97706",
     "Ambiental/Étnico-Cultural":                      "#d97706",
     "Ambiental/Riesgo de desastres":                  "#d97706",

@@ -170,35 +170,66 @@ def _query_predio_real(lat, lon):
 #  2 · FRONTERA AGRÍCOLA
 # ════════════════════════════════════════════════════════════════════════════
 
+_FRONTERA_API = "https://www.datos.gov.co/resource/fyc7-sbtz.json"
+
+_TIPO_FRONT_MAP = {
+    "No condicionada": "Frontera Agrícola no condicionada",
+    "Condicionada":    "Condicionada",
+}
+
+
 def get_frontera(gdf_predio: gpd.GeoDataFrame) -> gpd.GeoDataFrame | None:
     """
-    Devuelve zonas de frontera agrícola que intersectan el predio.
+    Devuelve zonas de frontera agrícola del municipio del predio.
+    Fuente: API datos.gov.co (fyc7-sbtz) — sin geometría propia,
+    usa proporciones a nivel municipal aplicadas al área del predio.
     Columnas: tipo_condi, area_ha, pct_predio
     """
-    geojson_predio = gdf_predio.geometry.iloc[0].__geo_interface__
-    area_predio_ha = float(gdf_predio.geometry.iloc[0].area * (111320 ** 2) / 10000)
+    import requests
+    from collections import defaultdict
 
-    sql = text("""
-        SELECT
-            tipo_condi,
-            ROUND((ST_Area(
-                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
-                ::geography) / 10000)::numeric, 2) AS area_ha,
-            ST_AsGeoJSON(
-                ST_Intersection(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
-            )::json AS geojson
-        FROM frontera_mvp
-        WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geom), 4326))
-    """)
-
-    gdf = _query_intersection(
-        sql, geojson_predio, ["tipo_condi", "area_ha"],
-        mock_records=[{"tipo_condi": "Frontera agrícola", "area_ha": area_predio_ha}]
+    codigo     = str(gdf_predio["codigo"].iloc[0])
+    cod_dane_m = codigo[:5]
+    area_predio_ha = float(
+        gdf_predio.to_crs("EPSG:3857").geometry.iloc[0].area / 10_000
     )
-    if gdf is not None and area_predio_ha > 0:
-        gdf["area_ha"]    = gdf["area_ha"].apply(lambda x: float(x) if x is not None else 0.0)
-        gdf["pct_predio"] = (gdf["area_ha"] / area_predio_ha * 100).round(1)
-    return gdf
+    predio_geom = gdf_predio.geometry.iloc[0]
+
+    try:
+        resp = requests.get(
+            _FRONTERA_API,
+            params={"cod_dane_m": cod_dane_m, "$limit": 50000},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        records = resp.json()
+    except Exception as e:
+        import streamlit as st
+        st.error(f"❌ Error consultando API Frontera Agrícola: {e}")
+        return None
+
+    if not records:
+        return None
+
+    totals: dict = defaultdict(float)
+    for r in records:
+        totals[r.get("tipo_front", "")] += float(r.get("area_ha", 0) or 0)
+
+    total_mun_ha = sum(totals.values())
+    if total_mun_ha == 0:
+        return None
+
+    rows, geoms = [], []
+    for tipo_front, ha_mun in totals.items():
+        pct_mun = ha_mun / total_mun_ha
+        rows.append({
+            "tipo_condi": _TIPO_FRONT_MAP.get(tipo_front, tipo_front),
+            "area_ha":    round(area_predio_ha * pct_mun, 2),
+            "pct_predio": round(pct_mun * 100, 1),
+        })
+        geoms.append(predio_geom)
+
+    return gpd.GeoDataFrame(rows, geometry=geoms, crs="EPSG:4326")
 
 
 # ════════════════════════════════════════════════════════════════════════════
