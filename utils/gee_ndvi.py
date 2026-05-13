@@ -221,12 +221,17 @@ def get_ndvi_gee(
         progress_cb(3, 5, f"Calculando serie temporal mensual ({n_years * 12} meses)…")
 
     def _monthly_mean(m_offset):
-        m_offset = ee.Number(m_offset)
-        start    = ee.Date(date_start).advance(m_offset, "month")
-        end      = start.advance(1, "month")
-        mean_val = (s2.filterDate(start, end).mean()
-                      .reduceRegion(ee.Reducer.mean(), roi, res_m, maxPixels=1e8)
-                      .get("NDVI"))
+        m_offset  = ee.Number(m_offset)
+        start     = ee.Date(date_start).advance(m_offset, "month")
+        end       = start.advance(1, "month")
+        monthly   = s2.filterDate(start, end)
+        mean_val  = ee.Algorithms.If(
+            monthly.size().gt(0),
+            monthly.mean()
+                   .reduceRegion(ee.Reducer.mean(), roi, res_m, maxPixels=1e8)
+                   .get("NDVI", None),
+            None,
+        )
         return ee.Feature(None, {"date": start.format("YYYY-MM-01"), "mean_ndvi": mean_val})
 
     monthly_fc  = ee.FeatureCollection(
