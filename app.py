@@ -1608,6 +1608,9 @@ with tab_validacion:
                     "Riesgo_extremo_1":  "Extremo (1.0)",
                     "Forma_curva":       "Curva",
                 })
+                for _col in ["Sin riesgo", "Bajo (0.25)", "Medio (0.50)", "Alto (0.75)", "Extremo (1.0)"]:
+                    if _col in df_curva.columns:
+                        df_curva[_col] = df_curva[_col].astype(str)
                 st.dataframe(df_curva, use_container_width=True, hide_index=True)
                 st.caption(
                     "Score interpolado linealmente entre umbrales. "
@@ -2193,6 +2196,9 @@ siguiente cálculo de riesgo para ese cultivo.
                 "Forma_curva":       "Curva",
             })
 
+            for _col in ["Sin riesgo", "Bajo (0.25)", "Medio (0.50)", "Alto (0.75)", "Extremo (1.0)"]:
+                if _col in _df_show.columns:
+                    _df_show[_col] = _df_show[_col].astype(str)
             _cultivos_mx = sorted(_df_show["Cultivo"].unique().tolist())
             _default_cult = (
                 _cult_m.capitalize()
