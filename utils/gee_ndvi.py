@@ -175,7 +175,7 @@ def get_ndvi_gee(
     _init_gee()
 
     if progress_cb:
-        progress_cb(0, 4, "Conectando con Google Earth Engine…")
+        progress_cb(0, 5, "Conectando con Google Earth Engine…")
 
     # Region of interest
     gdf4   = gdf_predio.to_crs("EPSG:4326")
@@ -188,7 +188,7 @@ def get_ndvi_gee(
     date_start = start_dt.strftime("%Y-%m-%d")
 
     if progress_cb:
-        progress_cb(1, 4, "Filtrando colección Sentinel-2…")
+        progress_cb(1, 5, "Filtrando colección Sentinel-2…")
 
     # Build NDVI collection
     s2 = (
@@ -210,7 +210,7 @@ def get_ndvi_gee(
         )
 
     if progress_cb:
-        progress_cb(2, 4, f"Calculando P25 sobre {n_total} imágenes…")
+        progress_cb(2, 5, f"Calculando P25 sobre {n_total} imágenes…")
 
     # Composites
     ndvi_p25_img = s2.reduce(ee.Reducer.percentile([25])).rename("NDVI_P25")
@@ -218,7 +218,7 @@ def get_ndvi_gee(
 
     # Monthly mean NDVI time series — one getInfo() call, computed server-side
     if progress_cb:
-        progress_cb(2, 5, f"Calculando serie temporal mensual ({n_years * 12} meses)…")
+        progress_cb(3, 5, f"Calculando serie temporal mensual ({n_years * 12} meses)…")
 
     def _monthly_mean(m_offset):
         m_offset = ee.Number(m_offset)
@@ -240,7 +240,7 @@ def get_ndvi_gee(
     )
 
     if progress_cb:
-        progress_cb(3, 4, "Descargando rásteres de píxeles…")
+        progress_cb(4, 5, "Descargando rásteres de píxeles…")
 
     # Download pixel arrays
     ndvi_p25   = _download_image(ndvi_p25_img,  "NDVI_P25",    roi, res_m)
@@ -275,7 +275,7 @@ def get_ndvi_gee(
     p25_in_predio  = ndvi_p25[pmask]
 
     if progress_cb:
-        progress_cb(4, 4, "Generando mapas…")
+        progress_cb(5, 5, "Generando mapas…")
 
     return {
         "ndvi_p25":       ndvi_p25,
