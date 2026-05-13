@@ -937,30 +937,26 @@ with tab_validacion:
         _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
         # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
+        # area_pend/area_ndvi/area_const come from their own analyses (shown in A2A/A2C)
+        # area_excluida is computed from the pixel union — only this drives the final result
         if _n_mask is not None:
             _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
             h, w     = _n_mask.shape
             n_predio = max(int(_pmask.sum()), 1)
 
-            _union    = _n_mask.copy()
-            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
-
+            _union = _n_mask.copy()
             if _s_mask is not None:
-                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                        .resize((w, h), _Im.NEAREST)).astype(bool)
-                _union    = _union | _sr
-                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
+                _sr    = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
+                                    .resize((w, h), _Im.NEAREST)).astype(bool)
+                _union = _union | _sr
 
             _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
-            _has_b = False
             if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                _union     = _union | _b_mask
-                _has_b     = True
-                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
+                _b_mask = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
+                _union  = _union | _b_mask
 
             layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
-            if _has_b:
+            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
                 layers.append("construcciones")
             metodo = "exacto (unión " + " + ".join(layers) + ")"
 
@@ -968,9 +964,6 @@ with tab_validacion:
             area_excluida = float(n_excluido / n_predio * area_total)
 
         elif _s_mask is not None:
-            _pmask_s      = ~np.isnan(_terrain.get("dem", np.array([[np.nan]])))
-            n_predio_s    = max(int(_pmask_s.sum()), 1)
-            area_pend     = float((_s_mask & _pmask_s).sum() / n_predio_s * area_total)
             area_excluida = area_pend + area_const
             metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
         else:
