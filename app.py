@@ -603,7 +603,18 @@ with tab_validacion:
     # ════════════════════════════════════════════════════════════════════
     st.markdown("### 📐 A · Validación Geométrica y Legal")
 
-    with st.expander("🌿 A1 · Zona Agrícola (Frontera)", expanded=True):
+    with st.expander("🏛️ A1 · Existencia del Predio", expanded=True):
+        _exist_codigo = predio.get("codigo", "—")
+        _exist_dep    = predio.get("departamento", "—")
+        _exist_ha     = predio.get("area_ha", "—")
+        semaforo(
+            f"✅ Predio catastral identificado — Código **{_exist_codigo}** · "
+            f"{_exist_dep} · {_exist_ha} ha",
+            "verde",
+        )
+        st.session_state["a1_nivel"] = "verde"
+
+    with st.expander("🌿 A2 · Zona Agrícola (Frontera)", expanded=True):
         with st.spinner("Cargando frontera agrícola..."):
             gdf_frontera = get_frontera(predio["gdf"])
         st.session_state["gdf_frontera"] = gdf_frontera
@@ -664,13 +675,13 @@ with tab_validacion:
                 _msg  = "✅ Todo el predio dentro de **Frontera Agrícola no condicionada**."
 
             semaforo(_msg, nivel)
-            st.session_state["a1_nivel"] = nivel
+            st.session_state["a2_nivel"] = nivel
         else:
             st.warning("No se encontró información de frontera agrícola para este predio.")
-            st.session_state["a1_nivel"] = "gris"
+            st.session_state["a2_nivel"] = "gris"
 
 
-    # ── A2 · Área Efectiva Cultivable ─────────────────────────────────────────
+    # ── A3 · Área Efectiva Cultivable ─────────────────────────────────────────
     # Fragments defined at tab level — not nested inside any expander
 
     @st.fragment
@@ -678,7 +689,7 @@ with tab_validacion:
         _pr = st.session_state.get("predio")
         if _pr is None:
             return
-        st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
+        st.markdown("#### 🏔️ A3-A · Análisis del Terreno (EOSDA API)")
         st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
 
         _slope_thr = st.slider(
@@ -780,7 +791,7 @@ with tab_validacion:
             st.session_state["area_pendiente_excluida_ha"] = _s["area_no_cultivable_ha"]
             st.caption(
                 "ℹ️ El área mostrada aquí usa la resolución nativa del DEM (~30 m). "
-                "En la tabla de Área Efectiva (A2) todos los componentes se recomputan "
+                "En la tabla de Área Efectiva (A3) todos los componentes se recomputan "
                 "sobre el grid de 10 m del NDVI para garantizar coherencia — "
                 "los valores pueden diferir ligeramente."
             )
@@ -791,7 +802,7 @@ with tab_validacion:
         _pr = st.session_state.get("predio")
         if _pr is None:
             return
-        st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
+        st.markdown("#### 🛰️ A3-C · Análisis de Actividad Productiva (NDVI)")
         st.caption(
             "Sentinel-2 L2A COG · P25 real por píxel · 3 años de historia · "
             "Filtro de nubosidad por SCL dentro del predio"
@@ -908,12 +919,12 @@ with tab_validacion:
         _terrain  = st.session_state.get("terrain")
         _ndvi_res = st.session_state.get("ndvi_result")
         if _terrain is None and _ndvi_res is None:
-            st.info("Calcula primero el **Análisis del Terreno (A2-A)** y/o el **NDVI (A2-C)**.")
+            st.info("Calcula primero el **Análisis del Terreno (A3-A)** y/o el **NDVI (A3-C)**.")
             return
 
         _missing = []
-        if _terrain  is None: _missing.append("Terreno (A2-A)")
-        if _ndvi_res is None: _missing.append("NDVI (A2-C)")
+        if _terrain  is None: _missing.append("Terreno (A3-A)")
+        if _ndvi_res is None: _missing.append("NDVI (A3-C)")
         if _missing:
             st.caption(f"ℹ️ Falta calcular: {', '.join(_missing)} — resultado será parcial.")
 
@@ -982,7 +993,7 @@ with tab_validacion:
             metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
         else:
             area_excluida = area_pend + area_ndvi + area_const
-            metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
+            metodo        = "aproximado (calcula A3-A y A3-C para resultado exacto)"
 
         area_ef = round(max(area_total - area_excluida, 0), 2)
         pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
@@ -1022,9 +1033,9 @@ with tab_validacion:
         with c_left:
             solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
             _componentes = ["Área total del predio",
-                            f"− Pendiente >{_slope_pct}% (A2-A)",
-                            f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
-                            "− Construcciones (A2-B)"]
+                            f"− Pendiente >{_slope_pct}% (A3-A)",
+                            f"− NDVI < {_ndvi_thr:.2f} (A3-C)",
+                            "− Construcciones (A3-B)"]
             _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
             if solapamiento > 0:
                 _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
@@ -1054,12 +1065,12 @@ with tab_validacion:
         }
 
 
-    with st.expander("📐 A2A · Análisis del Terreno", expanded=True):
+    with st.expander("📐 A3A · Análisis del Terreno", expanded=True):
         _terrain_fragment()
 
-    with st.expander("🏗️ A2B · Análisis de Construcciones", expanded=True):
+    with st.expander("🏗️ A3B · Análisis de Construcciones", expanded=True):
 
-        st.markdown("#### 🏗️ A2-B · Análisis de Construcciones")
+        st.markdown("#### 🏗️ A3-B · Análisis de Construcciones")
         with st.spinner("Cargando construcciones..."):
             gdf_const = get_construcciones(predio["gdf"])
         st.session_state["gdf_construcciones"] = gdf_const
@@ -1090,10 +1101,10 @@ with tab_validacion:
             area_const_real if gdf_const is not None else 0.0)
 
 
-    with st.expander("🛰️ A2C · Análisis de Actividad Productiva (NDVI)", expanded=True):
+    with st.expander("🛰️ A3C · Análisis de Actividad Productiva (NDVI)", expanded=True):
         _ndvi_fragment()
 
-    with st.expander("📊 A2 · Área Efectiva Cultivable", expanded=True):
+    with st.expander("📊 A3 · Área Efectiva Cultivable", expanded=True):
         _area_ef_fragment()
 
     # ════════════════════════════════════════════════════════════════════
@@ -1737,29 +1748,34 @@ with tab_validacion:
     _gdf_front = st.session_state.get("gdf_frontera")
     _apt_res   = apt_result if "apt_result" in dir() else None
 
-    # A1: read nivel already computed in the A1 expander (stored in session_state)
-    _sem_a1 = st.session_state.get("a1_nivel", "gris")
-    if _gdf_front is not None and len(_gdf_front) > 0:
-        _tipos_a1   = _gdf_front["tipo_condi"].unique().tolist()
-        _pct_tot_a1 = float(_gdf_front["pct_predio"].sum())
-        _pct_out_a1 = round(max(0.0, 100.0 - _pct_tot_a1), 1)
-        _tipos_cond_a1 = [t for t in _tipos_a1 if t != "Frontera Agrícola no condicionada"]
-        if _pct_out_a1 > 2:
-            _res_a1 = f"{_pct_out_a1:.1f}% fuera de Frontera Agrícola"
-        elif _tipos_cond_a1:
-            _res_a1 = f"Condicionada: {', '.join(_tipos_cond_a1)}"
-        else:
-            _res_a1 = "Todo en Frontera Agrícola no condicionada"
-    else:
-        _res_a1 = "—"
+    # A1: Existencia del predio (always verde if we are in this tab)
+    _sem_a1 = st.session_state.get("a1_nivel", "verde")
+    _res_a1 = f"Polígono catastral identificado · Código {predio.get('codigo','—')}"
 
-    _a2r    = st.session_state.get("area_ef_result", {})
-    _a2_pct = _a2r.get("pct_ef", None)
-    _a2_ha  = _a2r.get("area_ef", None)
-    _sem_a2 = ("verde" if _a2_pct is not None and _a2_pct >= 70 else
-               "amarillo" if _a2_pct is not None and _a2_pct >= 40 else
-               "rojo" if _a2_pct is not None else "gris")
-    _res_a2 = f"{_a2_ha} ha ({_a2_pct:.0f}% del predio)" if _a2_pct is not None else "—"
+    # A2: Frontera agrícola
+    _sem_a2 = st.session_state.get("a2_nivel", "gris")
+    if _gdf_front is not None and len(_gdf_front) > 0:
+        _tipos_a2   = _gdf_front["tipo_condi"].unique().tolist()
+        _pct_tot_a2 = float(_gdf_front["pct_predio"].sum())
+        _pct_out_a2 = round(max(0.0, 100.0 - _pct_tot_a2), 1)
+        _tipos_cond_a2 = [t for t in _tipos_a2 if t != "Frontera Agrícola no condicionada"]
+        if _pct_out_a2 > 2:
+            _res_a2 = f"{_pct_out_a2:.1f}% fuera de Frontera Agrícola"
+        elif _tipos_cond_a2:
+            _res_a2 = f"Condicionada: {', '.join(_tipos_cond_a2)}"
+        else:
+            _res_a2 = "Todo en Frontera Agrícola no condicionada"
+    else:
+        _res_a2 = "—"
+
+    # A3: Área Efectiva Cultivable
+    _a3r    = st.session_state.get("area_ef_result", {})
+    _a3_pct = _a3r.get("pct_ef", None)
+    _a3_ha  = _a3r.get("area_ef", None)
+    _sem_a3 = ("verde" if _a3_pct is not None and _a3_pct >= 70 else
+               "amarillo" if _a3_pct is not None and _a3_pct >= 40 else
+               "rojo" if _a3_pct is not None else "gris")
+    _res_a3 = f"{_a3_ha} ha ({_a3_pct:.0f}% del predio)" if _a3_pct is not None else "—"
 
     _apt_cat   = (_apt_res.get("category") if _apt_res and not _apt_res.get("error") else None)
     _apt_score = (_apt_res.get("score")    if _apt_res and not _apt_res.get("error") else None)
@@ -1795,8 +1811,9 @@ with tab_validacion:
 
     # ── Render table ──────────────────────────────────────────────────
     _summary_rows = [
-        ("A1", "Zona Agrícola · Frontera", "PostGIS / IGAC",          _sem_a1, _res_a1),
-        ("A2", "Área Efectiva Cultivable",  "DEM · NDVI · Catastro",   _sem_a2, _res_a2),
+        ("A1", "Existencia del Predio",     "PostGIS / IGAC",          _sem_a1, _res_a1),
+        ("A2", "Zona Agrícola · Frontera",  "PostGIS / IGAC",          _sem_a2, _res_a2),
+        ("A3", "Área Efectiva Cultivable",  "DEM · NDVI · Catastro",   _sem_a3, _res_a3),
         ("B1", "Aptitud al Cultivo",        "UPRA · datos.gov.co",     _sem_b1, _res_b1),
         ("B2", "Actividad Productiva NDVI", "EOSDA · Sentinel-2",      _sem_b2, _res_b2),
         ("C",  "Infraestructura / Acceso",  "OSM · OSRM",              _sem_c,  _res_c),
@@ -1866,7 +1883,8 @@ with tab_validacion:
                             pass
 
                     _pdf_analisis = {
-                        "a1_nivel":     st.session_state.get("a1_nivel", "gris"),
+                        "a1_nivel":     st.session_state.get("a1_nivel", "verde"),
+                        "a2_nivel":     st.session_state.get("a2_nivel", "gris"),
                         "gdf_frontera": st.session_state.get("gdf_frontera"),
                         "area_ef":      st.session_state.get("area_ef_result", {}).get("area_ef", 0),
                         "pct_ef":       st.session_state.get("area_ef_result", {}).get("pct_ef", 0),
@@ -1981,7 +1999,19 @@ with tab_metodologia:
     # ─── A · VALIDACIÓN GEOMÉTRICA Y LEGAL ───────────────────────────────────
     with st.expander("📐 A · Validación Geométrica y Legal", expanded=True):
 
-        st.markdown("#### 🌿 A1 · Zona Agrícola — Frontera Agrícola Nacional")
+        st.markdown("#### 🏛️ A1 · Existencia del Predio")
+        st.markdown("""
+**Descripción**
+Verifica que las coordenadas ingresadas correspondan a un polígono catastral registrado en la base IGAC almacenada en PostGIS.
+
+| Resultado | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| Polígono catastral identificado con geometría validada | 🟢 Verde | Sin restricción — continuar análisis |
+| Coordenadas fuera de cualquier predio catastral | 🔴 Rojo | Verificación manual con imágenes satelitales y fotos del solicitante |
+""")
+
+        st.markdown("---")
+        st.markdown("#### 🌿 A2 · Zona Agrícola — Frontera Agrícola Nacional")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("""
@@ -2020,16 +2050,16 @@ La lógica es conservadora: la presencia de **cualquier fracción** del predio f
 """)
 
         st.markdown("---")
-        st.markdown("#### 📏 A2 · Área Efectiva Cultivable")
+        st.markdown("#### 📏 A3 · Área Efectiva Cultivable")
         st.markdown("""
 El área efectiva es el área total del predio menos la superficie no cultivable por tres fuentes de exclusión.
-Cuando A2-A (pendiente) y A2-C (NDVI) están calculados, se hace la **unión exacta píxel a píxel**,
+Cuando A3-A (pendiente) y A3-C (NDVI) están calculados, se hace la **unión exacta píxel a píxel**,
 evitando el doble conteo de zonas que coinciden en múltiples capas.
 """)
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown(f"""
-**A2-A · Pendiente (DEM)**
+**A3-A · Pendiente (DEM)**
 
 - Fuente: EOSDA API — DEM SRTM 30 m
 - Umbral configurable (default **25 %**)
@@ -2042,7 +2072,7 @@ evitando el doble conteo de zonas que coinciden en múltiples capas.
 """)
         with c2:
             st.markdown(f"""
-**A2-C · NDVI histórico (Sentinel-2)**
+**A3-C · NDVI histórico (Sentinel-2)**
 
 - Fuente: Sentinel-2 L2A COG · Element84 Earth Search (sin API key)
 - Período: últimos **3 años**; filtro nubosidad SCL < 20 % dentro del predio
@@ -2056,7 +2086,7 @@ evitando el doble conteo de zonas que coinciden en múltiples capas.
 """)
         with c3:
             st.markdown("""
-**A2-B · Construcciones (Catastro)**
+**A3-B · Construcciones (Catastro)**
 
 - Fuente: IGAC · catastro nacional (PostGIS)
 - Las construcciones registradas se excluyen del área productiva
