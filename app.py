@@ -1750,7 +1750,7 @@ with tab_validacion:
 
     # A1: Existencia del predio (always verde if we are in this tab)
     _sem_a1 = st.session_state.get("a1_nivel", "verde")
-    _res_a1 = f"Polígono catastral identificado · Código {predio.get('codigo','—')}"
+    _res_a1 = "Polígono catastral identificado"
 
     # A2: Frontera agrícola
     _sem_a2 = st.session_state.get("a2_nivel", "gris")
