@@ -1800,7 +1800,7 @@ with tab_validacion:
 
     # ── Render table ──────────────────────────────────────────────────
     _summary_rows = [
-        ("A1", "Existencia del Predio",     "PostGIS / IGAC",          _sem_a1, _res_a1),
+        ("",   "Existencia del Predio",     "PostGIS / IGAC",          _sem_a1, _res_a1),
         ("A1", "Zona Agrícola · Frontera",  "PostGIS / IGAC",          _sem_a2, _res_a2),
         ("A2", "Área Efectiva Cultivable",  "DEM · NDVI · Catastro",   _sem_a3, _res_a3),
         ("B1", "Aptitud al Cultivo",        "UPRA · datos.gov.co",     _sem_b1, _res_b1),
