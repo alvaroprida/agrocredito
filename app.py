@@ -519,6 +519,18 @@ tab_inicio, tab_validacion, tab_monitoreo, tab_metodologia = st.tabs([
 with tab_inicio:
     st.subheader("Datos del predio a evaluar")
 
+    # Nueva consulta
+    _col_nc, _ = st.columns([1, 3])
+    with _col_nc:
+        if st.button("🔄 Nueva consulta", key="btn_nueva_consulta"):
+            for _k in ["analizado","lat","lon","cultivo","datos","predio","terrain",
+                       "ndvi_result","area_ef_result","area_ef_computed","b2_result",
+                       "gdf_frontera","gdf_aptitud","gdf_construcciones",
+                       "a1_nivel","a2_nivel","area_pendiente_excluida_ha",
+                       "area_ndvi_bajo_ha","area_construcciones_ha"]:
+                st.session_state.pop(_k, None)
+            st.rerun()
+
     c1, c2, c3 = st.columns(3)
     with c1: lat_input  = st.number_input("Latitud",  value=5.07013,  format="%.6f")
     with c2: lon_input  = st.number_input("Longitud", value=-73.55157, format="%.6f")
@@ -571,6 +583,21 @@ with tab_inicio:
         file_name=f"predio_{predio['codigo']}.geojson",
         mime="application/geo+json",
     )
+
+    st.markdown("---")
+    st.markdown("#### 👁️ Validación inicial de unidad productiva")
+    st.caption("Confirmación visual por el asesor basada en imágenes satelitales / visita de campo.")
+    _obs_opts = [
+        "Se observa unidad productiva / cultivo / área agropecuaria aparente",
+        "No se observa unidad productiva clara",
+        "Requiere validación manual",
+    ]
+    _obs_sel = st.radio("Observación del asesor:", _obs_opts, key="obs_unidad_productiva", index=0)
+    _obs_color = {"Se observa unidad productiva / cultivo / área agropecuaria aparente": "verde",
+                  "No se observa unidad productiva clara": "rojo",
+                  "Requiere validación manual": "naranja"}[_obs_sel]
+    st.session_state["obs_unidad_productiva_nivel"] = _obs_color
+    st.session_state["obs_unidad_productiva_texto"] = _obs_sel
 
     st.markdown("---")
     st.markdown("👉 Navega a **Validación Pre-Crédito** para el análisis detallado.")
@@ -1311,6 +1338,58 @@ with tab_validacion:
                 )
                 st.plotly_chart(fig_b2, use_container_width=True)
 
+    with st.expander("🏔️ B3 · Altitud del predio vs. cultivo declarado", expanded=True):
+        import os as _os_alt
+        _ALT_XLSX = _os_alt.path.join(_os_alt.path.dirname(__file__), "data", "rangos_altitud_cultivos.xlsx")
+        try:
+            _df_alt = pd.read_excel(_ALT_XLSX)
+        except Exception as _e_alt:
+            st.warning(f"No se pudo cargar la tabla de rangos de altitud: {_e_alt}")
+            _df_alt = None
+
+        _terrain_b3 = st.session_state.get("terrain")
+        _elev_mean  = (_terrain_b3["stats"]["elev_mean"] if _terrain_b3 else None)
+
+        if _df_alt is not None:
+            _row_alt = _df_alt[_df_alt["Cultivo"].str.lower() == cultivo.lower()]
+            if _row_alt.empty:
+                _row_alt = _df_alt[_df_alt["Cultivo"].str.lower().str.contains(cultivo.lower().split()[0])]
+            if not _row_alt.empty:
+                _alt_min = int(_row_alt.iloc[0]["Altitud mínima (m)"])
+                _alt_max = int(_row_alt.iloc[0]["Altitud máxima (m)"])
+                _alt_desc = _row_alt.iloc[0]["Descripción / Justificación"]
+                st.caption(f"Rango óptimo para **{cultivo}**: **{_alt_min} – {_alt_max} m.s.n.m.** · {_alt_desc}")
+
+                if _elev_mean is not None:
+                    if _alt_min <= _elev_mean <= _alt_max:
+                        _b3_nivel = "verde"
+                        _b3_msg   = (f"✅ Altitud media del predio ({_elev_mean:.0f} m) dentro del rango "
+                                     f"óptimo para {cultivo} ({_alt_min}–{_alt_max} m).")
+                    else:
+                        _b3_nivel = "rojo"
+                        _b3_msg   = (f"⚠️ Altitud media del predio ({_elev_mean:.0f} m) fuera del rango "
+                                     f"óptimo para {cultivo} ({_alt_min}–{_alt_max} m). "
+                                     f"Revisar capacidad productiva real del predio y solicitar "
+                                     f"justificación agronómica al solicitante.")
+                    semaforo(_b3_msg, _b3_nivel)
+                    st.session_state["b3_nivel"] = _b3_nivel
+                    st.session_state["b3_elev"]  = _elev_mean
+                    st.session_state["b3_alt_min"] = _alt_min
+                    st.session_state["b3_alt_max"] = _alt_max
+                    # KPIs
+                    _kb1, _kb2, _kb3 = st.columns(3)
+                    with _kb1: kpi("Elevación media predio", f"{_elev_mean:.0f}", "m")
+                    with _kb2: kpi("Altitud mínima cultivo", str(_alt_min), "m")
+                    with _kb3: kpi("Altitud máxima cultivo", str(_alt_max), "m")
+                else:
+                    st.info("ℹ️ Calcula primero el **Análisis del Terreno (A2A)** para obtener la altitud del predio.")
+                    st.session_state["b3_nivel"] = "gris"
+            else:
+                st.warning(f"No hay rango de altitud definido para el cultivo **{cultivo}** en la tabla de referencia.")
+                st.session_state["b3_nivel"] = "gris"
+        else:
+            st.session_state["b3_nivel"] = "gris"
+
     # ════════════════════════════════════════════════════════════════════
     #  C · INFRAESTRUCTURA
     # ════════════════════════════════════════════════════════════════════
@@ -1784,12 +1863,14 @@ with tab_validacion:
     _res_c = _detalle_global
 
     _sem_d, _res_d = "gris", "—"
+    _d_agg_val = None
     if _clima_ok and _cultivo_tiene_matriz:
         try:
             _d_risk = _get_risk_cached(c_lat, c_lon, cultivo, mtime=_matrix_mtime())
             if not _d_risk.empty:
                 _d_agg = aggregate_risk_score(_d_risk)
                 if not np.isnan(_d_agg):
+                    _d_agg_val = float(_d_agg)
                     _d_lbl = score_to_label(_d_agg)
                     _d_col = score_to_color(_d_agg)
                     _sem_d = ("verde" if _d_col in ("verde","amarillo") else
@@ -1799,14 +1880,22 @@ with tab_validacion:
             pass
 
     # ── Render table ──────────────────────────────────────────────────
+    _sem_b3 = st.session_state.get("b3_nivel", "gris")
+    _b3_elev    = st.session_state.get("b3_elev")
+    _b3_alt_min = st.session_state.get("b3_alt_min")
+    _b3_alt_max = st.session_state.get("b3_alt_max")
+    _res_b3 = (f"{_b3_elev:.0f} m (rango {_b3_alt_min}–{_b3_alt_max} m)"
+               if _b3_elev is not None else "—")
+
     _summary_rows = [
-        ("",   "Existencia del Predio",     "PostGIS / IGAC",          _sem_a1, _res_a1),
-        ("A1", "Zona Agrícola · Frontera",  "PostGIS / IGAC",          _sem_a2, _res_a2),
-        ("A2", "Área Efectiva Cultivable",  "DEM · NDVI · Catastro",   _sem_a3, _res_a3),
-        ("B1", "Aptitud al Cultivo",        "UPRA · datos.gov.co",     _sem_b1, _res_b1),
-        ("B2", "Actividad Productiva NDVI", "EOSDA · Sentinel-2",      _sem_b2, _res_b2),
-        ("C",  "Infraestructura / Acceso",  "OSM · OSRM",              _sem_c,  _res_c),
-        ("D",  "Riesgo Agroclimático",      "ERA5 · Open-Meteo · P80", _sem_d,  _res_d),
+        ("",   "Existencia del Predio",       "PostGIS / IGAC",          _sem_a1, _res_a1),
+        ("A1", "Zona Agrícola · Frontera",    "PostGIS / IGAC",          _sem_a2, _res_a2),
+        ("A2", "Área Efectiva Cultivable",    "DEM · NDVI · Catastro",   _sem_a3, _res_a3),
+        ("B1", "Aptitud al Cultivo",          "UPRA · datos.gov.co",     _sem_b1, _res_b1),
+        ("B2", "Actividad Productiva NDVI",   "EOSDA · Sentinel-2",      _sem_b2, _res_b2),
+        ("B3", "Altitud vs. Cultivo",         "DEM EOSDA · Ref. UPRA",   _sem_b3, _res_b3),
+        ("C",  "Infraestructura / Acceso",    "OSM · OSRM",              _sem_c,  _res_c),
+        ("D",  "Riesgo Agroclimático",        "ERA5 · Open-Meteo · P80", _sem_d,  _res_d),
     ]
     _tbl_rows = ""
     for _code, _name, _src, _sem, _res in _summary_rows:
@@ -1834,6 +1923,85 @@ with tab_validacion:
         f'</tr></thead><tbody>{_tbl_rows}</tbody></table>',
         unsafe_allow_html=True,
     )
+
+    # ════════════════════════════════════════════════════════════════════
+    #  SCORE AGREGADO FINAL
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 🎯 Score Final Consolidado")
+
+    # ── Sub-puntuaciones por indicador ───────────────────────────────
+    def _sub_frontera(sem):
+        return {"verde": 1, "amarillo": 2, "naranja": 2, "rojo": 4}.get(sem, None)
+
+    def _sub_area(pct):
+        if pct is None: return None
+        return 1 if pct >= 70 else 2 if pct >= 40 else 4
+
+    def _sub_aptitud(score_apt):
+        if score_apt is None: return None
+        return 1 if score_apt >= 0.70 else 2 if score_apt >= 0.40 else 3
+
+    def _sub_ndvi(b2):
+        if b2 is None: return None
+        pct_a = b2.get("pct_active", 0)
+        return 1 if pct_a > 40 else 2 if pct_a > 20 else 3
+
+    def _sub_infra(col_cu, col_via):
+        _rank = {"verde": 0, "naranja": 1, "rojo": 2}
+        worst = max([col_cu, col_via], key=lambda c: _rank.get(c, 0))
+        return {"verde": 1, "naranja": 2, "rojo": 3}.get(worst, None)
+
+    def _sub_d(agg):
+        if agg is None: return None
+        return 1 if agg < 0.25 else 2 if agg < 0.50 else 3 if agg < 0.75 else 4
+
+    def _sub_b3(sem):
+        return {"verde": 1, "rojo": 4}.get(sem, None)
+
+    _SCORES_CALC = {
+        "exist":  (0.15, 1),
+        "front":  (0.15, _sub_frontera(_sem_a2)),
+        "area":   (0.10, _sub_area(_a3_pct)),
+        "apt":    (0.15, _sub_aptitud(_apt_score if _apt_res and not _apt_res.get("error") else None)),
+        "ndvi":   (0.15, _sub_ndvi(_b2_sum)),
+        "b3":     (0.00, _sub_b3(_sem_b3)),   # B3 informativo, no entra en pesos actuales
+        "infra":  (0.15, _sub_infra(_color_cu, _color_via)),
+        "d":      (0.15, _sub_d(_d_agg_val)),
+    }
+
+    _peso_total  = sum(p for p, v in _SCORES_CALC.values() if v is not None)
+    _score_sum   = sum(p * v for p, v in _SCORES_CALC.values() if v is not None)
+    _score_final = round(_score_sum / _peso_total) if _peso_total > 0 else None
+
+    _DECISION_MAP = {
+        1: ("Apto sin restricciones relevantes",   "verde",   "✅"),
+        2: ("Apto con validaciones adicionales",    "naranja", "🟡"),
+        3: ("Requiere revisión manual",             "rojo",    "⚠️"),
+        4: ("No recomendable bajo criterios actuales", "rojo", "⛔"),
+    }
+
+    if _score_final is not None and _score_final in _DECISION_MAP:
+        _dec_label, _dec_color, _dec_em = _DECISION_MAP[_score_final]
+        _dec_bg = {"verde":"#d1fae5","naranja":"#fef3c7","rojo":"#fee2e2"}[_dec_color]
+        _dec_bd = {"verde":"#059669","naranja":"#d97706","rojo":"#dc2626"}[_dec_color]
+        _dec_tx = {"verde":"#065f46","naranja":"#78350f","rojo":"#7f1d1d"}[_dec_color]
+        _n_calc  = sum(1 for p, (_, _pv) in _SCORES_CALC.items() if _pv is not None and p != "b3")
+        st.markdown(
+            f'<div style="background:{_dec_bg};border-left:8px solid {_dec_bd};'
+            f'padding:1.1rem 1.4rem;border-radius:8px;margin:0.5rem 0 1rem 0">'
+            f'<div style="font-size:1.5rem;font-weight:800;color:{_dec_tx};margin-bottom:0.3rem">'
+            f'{_dec_em} Score final: <span style="font-size:2rem">{_score_final}</span> / 4</div>'
+            f'<div style="font-size:1.1rem;font-weight:600;color:{_dec_tx}">{_dec_label}</div>'
+            f'<div style="font-size:0.82rem;color:{_dec_tx};margin-top:0.4rem;opacity:0.85">'
+            f'Score ponderado: {_score_sum / _peso_total:.2f} · basado en {_n_calc} indicadores calculados</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.session_state["score_final"]    = _score_final
+        st.session_state["decision_final"] = _dec_label
+    else:
+        st.info("⚙️ Calcula los indicadores del análisis para obtener el score final consolidado.")
 
     # ════════════════════════════════════════════════════════════════════
     #  PDF
@@ -1894,6 +2062,9 @@ with tab_validacion:
                         "df_risk":      _pdf_risk_df,
                         "risk_score":   _pdf_risk_score,
                         "risk_label":   _pdf_risk_label,
+                        "score_final":    st.session_state.get("score_final"),
+                        "decision_final": st.session_state.get("decision_final"),
+                        "obs_unidad":     st.session_state.get("obs_unidad_productiva_texto", "—"),
                     }
                     pdf_bytes = generate_exante_report(
                         datos=d, predio=predio, analisis=_pdf_analisis,

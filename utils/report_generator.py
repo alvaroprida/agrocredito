@@ -262,6 +262,11 @@ def _build_pdf(
                    "amarillo" if d_score < 0.50 else
                    "rojo"    if d_score < 0.75 else "rojo")
 
+    # Score final consolidado
+    score_final    = an.get("score_final")
+    decision_final = an.get("decision_final", "—")
+    obs_unidad     = an.get("obs_unidad", "—")
+
     # Global dictamen (worst of all 6)
     _rank = {"verde":0,"amarillo":1,"naranja":1,"rojo":2,"gris":-1}
     _all_niveles = [a1_nivel, a2_nivel, b1_nivel, b2_nivel, c_nivel, d_nivel]
@@ -333,7 +338,36 @@ def _build_pdf(
         ("RIGHTPADDING",  (0,0), (-1,-1), 14),
         ("LINEBELOW",     (0,0), (-1,0),  1, _hex(d_fg)),
     ]))
-    story += [dict_box, SP(0.4)]
+    story += [dict_box, SP(0.3)]
+
+    # ── 2b · SCORE FINAL CONSOLIDADO ─────────────────────────────────────────
+    if score_final is not None:
+        _sf_colors = {
+            1: (C.GREEN_BG, C.GREEN),
+            2: (C.AMBER_BG, C.AMBER),
+            3: (C.RED_BG,   C.RED),
+            4: (C.RED_BG,   C.RED),
+        }
+        _sf_bg, _sf_fg = _sf_colors.get(score_final, (C.GREY_BG, C.SUBTEXT))
+        sf_ps = _sty("sf", fontName="Helvetica-Bold", fontSize=11,
+                     alignment=TA_CENTER, textColor=_hex(_sf_fg))
+        sf_box = Table(
+            [[Paragraph(f"SCORE FINAL: {score_final} / 4  ·  {decision_final}", sf_ps)]],
+            colWidths=[TW],
+        )
+        sf_box.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), _hex(_sf_bg)),
+            ("TOPPADDING",    (0,0), (-1,-1), 7),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+            ("LEFTPADDING",   (0,0), (-1,-1), 14),
+            ("RIGHTPADDING",  (0,0), (-1,-1), 14),
+        ]))
+        story += [sf_box, SP(0.15)]
+
+    # Obs. unidad productiva
+    if obs_unidad and obs_unidad != "—":
+        story.append(P(f"<b>Observación inicial asesor:</b> {obs_unidad}", "body"))
+    story.append(SP(0.25))
 
     # ── 3 · TABLA RESUMEN DE INDICADORES ─────────────────────────────────────
     story.append(P("Resumen de Indicadores", "h2"))
