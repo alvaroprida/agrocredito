@@ -70,6 +70,7 @@ from utils.monitoring_indicators  import (
     SEM_ICON, SEM_BG, SEM_BD, SEM_TEXT,
 )
 import io
+import json
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_aptitud_cached(_gdf_predio, cultivo: str):
@@ -106,6 +107,11 @@ def _get_b2_cached(geojson_str: str, cultivo: str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_monitoring_cached(lat: float, lon: float):
     return get_monitoring_series(lat, lon, n_hist_years=5)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_monitoring_ndvi_cached(geojson_str: str, date_start: str, date_end: str, api_key: str):
+    from utils.eosda_ndvi import _do_fetch
+    return _do_fetch(geojson_str, date_start, date_end, api_key)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
@@ -2306,15 +2312,158 @@ with tab_monitoreo:
                             unsafe_allow_html=True,
                         )
 
-            # Bloque A: NDVI (retrospectivo, requiere EOSDA API)
+            # Bloque A: NDVI (retrospectivo, Sentinel-2 via EOSDA)
             st.markdown("---")
-            with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2)", expanded=False):
-                st.info(
-                    "El análisis NDVI requiere la API key de EOSDA y el polígono catastral "
-                    "del predio. Disponible en el Tab de Validación Pre-Crédito una vez "
-                    "analizado el predio individualmente.",
-                    icon="ℹ️",
+            with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2)", expanded=True):
+                st.caption(
+                    "Anomalía NDVI vs. media histórica del mismo mes (A1) y tendencia "
+                    "entre escenas consecutivas (A2). Solo retrospectivo — sin forecast satelital."
                 )
+                _ndvi_cache_key = f"mon_ndvi_{_sel_name}"
+
+                # Comprobar API key
+                try:
+                    _eosda_key = st.secrets.get("EOSDA_API_KEY", "")
+                except Exception:
+                    import os as _os
+                    _eosda_key = _os.environ.get("EOSDA_API_KEY", "")
+
+                if not _eosda_key:
+                    st.warning(
+                        "Análisis NDVI no disponible: configura **EOSDA_API_KEY** "
+                        "en los secrets de Streamlit.",
+                        icon="⚠️",
+                    )
+                else:
+                    _btn_ndvi = st.button(
+                        "🛰️ Calcular NDVI",
+                        key=f"btn_mon_ndvi_{_sel_name}",
+                    )
+                    if _btn_ndvi:
+                        # Polígono ~300 m × 300 m alrededor del punto
+                        _lat_n = float(_sel_p["lat"])
+                        _lon_n = float(_sel_p["lon"])
+                        _d = 0.0015  # ≈ 165 m
+                        _gjson = json.dumps({
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [_lon_n - _d, _lat_n - _d],
+                                [_lon_n + _d, _lat_n - _d],
+                                [_lon_n + _d, _lat_n + _d],
+                                [_lon_n - _d, _lat_n + _d],
+                                [_lon_n - _d, _lat_n - _d],
+                            ]],
+                        })
+                        _d_end   = date.today().strftime("%Y-%m-%d")
+                        _d_start = (date.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
+                        with st.spinner("Consultando Sentinel-2 vía EOSDA…"):
+                            try:
+                                _scenes = _get_monitoring_ndvi_cached(
+                                    _gjson, _d_start, _d_end, _eosda_key
+                                )
+                                st.session_state[_ndvi_cache_key] = _scenes
+                            except Exception as _e:
+                                st.error(f"Error EOSDA: {_e}")
+                                st.session_state.pop(_ndvi_cache_key, None)
+
+                    _scenes = st.session_state.get(_ndvi_cache_key)
+
+                    if _scenes is None:
+                        st.info("Pulsa **Calcular NDVI** para consultar las escenas Sentinel-2.", icon="👆")
+                    elif len(_scenes) == 0:
+                        st.warning("No se obtuvieron escenas válidas (nubes <20%) en los últimos 3 años.")
+                    else:
+                        _df_sc = pd.DataFrame(_scenes).copy()
+                        _df_sc["date"]  = pd.to_datetime(_df_sc["date"])
+                        _df_sc["month"] = _df_sc["date"].dt.month
+                        _df_sc = _df_sc.sort_values("date").reset_index(drop=True)
+
+                        # Media histórica por mes
+                        _monthly_hist = _df_sc.groupby("month")["median"].mean()
+
+                        # Escena más reciente y anterior
+                        _last   = _df_sc.iloc[-1]
+                        _ndvi_c = float(_last["median"])
+                        _last_d = _last["date"]
+                        _days_lag = (date.today() - _last_d.date()).days
+                        _hist_m   = _monthly_hist.get(_last_d.month, np.nan)
+
+                        # A1: anomalía
+                        _a1_pct = ((_ndvi_c - _hist_m) / _hist_m * 100
+                                   if not pd.isna(_hist_m) and _hist_m > 0 else np.nan)
+                        _a1_sem = ("verde" if pd.isna(_a1_pct) or _a1_pct > -10
+                                   else ("amarillo" if _a1_pct > -25 else "rojo"))
+
+                        # A2: tendencia
+                        if len(_df_sc) >= 2:
+                            _a2_val = round(_ndvi_c - float(_df_sc.iloc[-2]["median"]), 3)
+                            _a2_sem = ("verde" if _a2_val >= -0.02
+                                       else ("amarillo" if _a2_val >= -0.05 else "rojo"))
+                        else:
+                            _a2_val, _a2_sem = np.nan, "verde"
+
+                        st.caption(
+                            f"Escena más reciente: **{_last_d.strftime('%d %b %Y')}** · "
+                            f"rezago {_days_lag} días · nubes < 20% · "
+                            f"{len(_df_sc)} escenas válidas en 3 años"
+                        )
+
+                        _a_actions = {
+                            "A1": {
+                                "verde":    "Sin acción requerida.",
+                                "amarillo": "Llamada al agricultor para verificar estado del cultivo; registrar en expediente.",
+                                "rojo":     "Solicitar evidencia fotográfica + visita técnica; activar documentación seguro agrícola.",
+                            },
+                            "A2": {
+                                "verde":    "Sin acción requerida.",
+                                "amarillo": "Monitorear próxima imagen Sentinel-2 con prioridad.",
+                                "rojo":     "Si A1 también en rojo: activar protocolo de alivio.",
+                            },
+                        }
+                        _ca1, _ca2 = st.columns(2)
+                        for _acol, _aid, _alabel, _adisp, _asem in [
+                            (_ca1, "A1",
+                             "A1 · Anomalía NDVI vs. media histórica mes",
+                             (f"{_ndvi_c:.3f}  ({_a1_pct:+.1f}%)" if not pd.isna(_a1_pct)
+                              else f"{_ndvi_c:.3f}  (sin normal histórica)"),
+                             _a1_sem),
+                            (_ca2, "A2",
+                             "A2 · Tendencia (vs. escena anterior)",
+                             (f"{_a2_val:+.3f}" if not pd.isna(_a2_val) else "Sin datos"),
+                             _a2_sem),
+                        ]:
+                            with _acol:
+                                st.markdown(
+                                    f'<div style="background:{SEM_BG[_asem]};'
+                                    f'border-left:4px solid {SEM_BD[_asem]};'
+                                    f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
+                                    f'<div style="font-size:0.72rem;font-weight:600;'
+                                    f'color:{SEM_TEXT[_asem]}">'
+                                    f'{SEM_ICON[_asem]} {_alabel}</div>'
+                                    f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
+                                    f'{_adisp}</div>'
+                                    f'<div style="font-size:0.68rem;color:#6b7280">'
+                                    f'→ {_a_actions[_aid][_asem]}</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+                        # Serie temporal NDVI
+                        _fig_sc = px.scatter(
+                            _df_sc, x="date", y="median",
+                            labels={"date": "", "median": "NDVI mediano"},
+                            color_discrete_sequence=["#16a34a"],
+                            title="Serie NDVI · escenas Sentinel-2 válidas (3 años)",
+                        )
+                        if not pd.isna(_hist_m):
+                            _fig_sc.add_hline(
+                                y=_hist_m, line_dash="dash", line_color="#94a3b8",
+                                annotation_text=f"Normal mes {_last_d.month} ({_hist_m:.3f})",
+                                annotation_position="bottom right",
+                            )
+                        _fig_sc.update_traces(marker=dict(size=7))
+                        _fig_sc.update_layout(height=240, margin=dict(t=35, b=10))
+                        st.plotly_chart(_fig_sc, use_container_width=True)
     else:
         st.markdown("---")
         st.info(
