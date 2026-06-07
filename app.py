@@ -64,6 +64,12 @@ from utils.risk_scoring   import (
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
 )
 from utils.report_generator import generate_exante_report
+from utils.monitoring_climate     import get_monitoring_series
+from utils.monitoring_indicators  import (
+    compute_all_indicators, HORIZONS,
+    SEM_ICON, SEM_BG, SEM_BD, SEM_TEXT,
+)
+import io
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_aptitud_cached(_gdf_predio, cultivo: str):
@@ -96,6 +102,10 @@ def _get_b2_cached(geojson_str: str, cultivo: str):
     from shapely.geometry import shape
     gdf = gpd.GeoDataFrame(geometry=[shape(json.loads(geojson_str))], crs="EPSG:4326")
     return get_productivity_analysis(gdf, cultivo)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_monitoring_cached(lat: float, lon: float):
+    return get_monitoring_series(lat, lon, n_hist_years=5)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
@@ -187,6 +197,20 @@ CASOS_ESTUDIO = {
 }
 
 MOCK_NDVI = {"ndvi_promedio": 0.71, "area_ndvi_bajo_ha": 0.6, "umbral_ndvi": 0.40}
+
+# Portafolio de demostración — 5 predios agrícolas en Cundinamarca
+PORTFOLIO_DEFAULT = [
+    {"nombre_predio": "Finca La Esperanza", "lat": 4.3368, "lon": -74.3639,
+     "cultivo": "Café",           "fecha_desembolso": "2025-02-15"},
+    {"nombre_predio": "Predio El Mirador",  "lat": 5.0163, "lon": -74.4733,
+     "cultivo": "Plátano",        "fecha_desembolso": "2025-03-01"},
+    {"nombre_predio": "Finca San Carlos",   "lat": 5.3153, "lon": -73.8226,
+     "cultivo": "Papa",           "fecha_desembolso": "2025-01-20"},
+    {"nombre_predio": "Predio Los Naranjos","lat": 4.5500, "lon": -74.5333,
+     "cultivo": "Cacao",          "fecha_desembolso": "2025-04-10"},
+    {"nombre_predio": "Hda. El Aguacate",   "lat": 4.6349, "lon": -74.4600,
+     "cultivo": "Aguacate (Hass)","fecha_desembolso": "2024-12-05"},
+]
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PALETAS Y HELPERS UI
@@ -2088,57 +2112,215 @@ with tab_validacion:
             )
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 2 · MONITOREO & FORECAST
+#  TAB 2 · MONITOREO DE PORTAFOLIO
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_monitoreo:
-    d = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
-    st.subheader("Monitoreo en Tiempo Real y Forecast")
-    st.caption("Módulo activo durante el ciclo de vida del crédito.")
+    st.subheader("Monitoreo de Portafolio · Fase de Cobranza")
+    st.caption(
+        "Indicadores climáticos y productivos en tiempo real por predio activo. "
+        "Detecta señales de estrés antes de que se materialicen en mora."
+    )
 
-    if d.get("alerta_activa"):
-        st.error(d.get("alerta_msg","⚠️ Alerta climática activa"))
+    # ── Gestión del portafolio ────────────────────────────────────────────────
+    with st.expander("📂 Gestión del Portafolio", expanded=True):
+        col_up, col_dl = st.columns([3, 1])
+        with col_up:
+            uploaded_port = st.file_uploader(
+                "Cargar portafolio (Excel)",
+                type=["xlsx"],
+                help="Columnas requeridas: nombre_predio · latitud · longitud · cultivo · fecha_desembolso (opcional)",
+                key="portfolio_upload",
+            )
+        with col_dl:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _tmpl_buf = io.BytesIO()
+            pd.DataFrame([{
+                "nombre_predio":    "Finca Ejemplo",
+                "latitud":          4.5000,
+                "longitud":        -74.3000,
+                "cultivo":          "Café",
+                "fecha_desembolso": "2025-01-15",
+            }]).to_excel(_tmpl_buf, index=False)
+            st.download_button(
+                "📥 Descargar Template",
+                data=_tmpl_buf.getvalue(),
+                file_name="template_portafolio.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    # ── Carga del portafolio ──────────────────────────────────────────────────
+    if uploaded_port is not None:
+        try:
+            _df_port = pd.read_excel(uploaded_port)
+            _missing = {"nombre_predio", "latitud", "longitud", "cultivo"} - set(_df_port.columns)
+            if _missing:
+                st.error(f"Columnas faltantes: {', '.join(_missing)}")
+                _portfolio = PORTFOLIO_DEFAULT
+            else:
+                _portfolio = _df_port.fillna("").to_dict("records")
+                st.success(f"Portafolio cargado: {len(_portfolio)} predios")
+        except Exception as _e:
+            st.error(f"Error al leer el archivo: {_e}")
+            _portfolio = PORTFOLIO_DEFAULT
     else:
-        st.success("✅ Sin alertas climáticas activas en este momento.")
+        _portfolio = PORTFOLIO_DEFAULT
+        st.info(
+            "Usando portafolio de demostración · 5 predios agrícolas en Cundinamarca",
+            icon="ℹ️",
+        )
 
-    c1,c2,c3 = st.columns(3)
-    with c1:
-        kpi("NDVI actual", round(d["ndvi_actual"],2))
-        st.caption(f"Tendencia: {d['ndvi_tendencia']}")
-    with c2: kpi("Precipitación forecast (hoy)", f"{d['forecast_precip_7d'][0]}", "mm")
-    with c3: kpi("Temperatura forecast (hoy)",   f"{d['forecast_temp_7d'][0]}",   "°C")
+    # ── Botón de cálculo ──────────────────────────────────────────────────────
+    _col_btn, _ = st.columns([1, 3])
+    with _col_btn:
+        _calc_btn = st.button(
+            "📊 Calcular indicadores",
+            type="primary",
+            use_container_width=True,
+            key="btn_calc_monitoring",
+        )
 
-    st.markdown("---")
-    dias = [(date.today()+timedelta(days=i)).strftime("%d %b") for i in range(7)]
-    c1,c2 = st.columns(2)
-    with c1:
-        fig_fp = px.bar(x=dias, y=d["forecast_precip_7d"],
-                        title="Precipitación · Forecast 7 días (mm)",
-                        labels={"x":"","y":"mm"},
-                        color_discrete_sequence=["#3b82f6"])
-        fig_fp.update_layout(height=260, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_fp, use_container_width=True)
-    with c2:
-        fig_ft = px.line(x=dias, y=d["forecast_temp_7d"],
-                         title="Temperatura · Forecast 7 días (°C)",
-                         labels={"x":"","y":"°C"},
-                         color_discrete_sequence=["#ef4444"])
-        fig_ft.update_layout(height=260, margin=dict(t=40,b=20))
-        st.plotly_chart(fig_ft, use_container_width=True)
+    if _calc_btn:
+        _results_map: dict = {}
+        _prog = st.progress(0, text="Iniciando descarga de datos climáticos...")
+        for _i, _p in enumerate(_portfolio):
+            _prog.progress(
+                (_i) / len(_portfolio),
+                text=f"Descargando datos para {_p['nombre_predio']} ({_i+1}/{len(_portfolio)})…",
+            )
+            try:
+                _series = _get_monitoring_cached(float(_p["lat"]), float(_p["lon"]))
+                _results_map[_p["nombre_predio"]] = compute_all_indicators(
+                    _series["combined_df"],
+                    str(_p["cultivo"]),
+                    _series["ytd_clim"],
+                    _series["today"],
+                )
+            except Exception as _e:
+                _results_map[_p["nombre_predio"]] = {"error": str(_e)}
+        _prog.progress(1.0, text="Listo.")
+        st.session_state["mon_results"]   = _results_map
+        st.session_state["mon_portfolio"] = _portfolio
 
-    st.markdown("---")
-    st.markdown("### 📈 Evolución NDVI (últimos 12 meses)")
-    MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-    fig_nm = px.line(x=MESES, y=d["ndvi_mensual_hist"],
-                     labels={"x":"Mes","y":"NDVI"},
-                     color_discrete_sequence=["#16a34a"])
-    fig_nm.add_scatter(x=[MESES[-1]], y=[d["ndvi_actual"]],
-                       mode="markers", marker=dict(size=10,color="#dc2626"),
-                       name="NDVI actual")
-    fig_nm.update_layout(height=260, margin=dict(t=20,b=20))
-    st.plotly_chart(fig_nm, use_container_width=True)
+    _results_map = st.session_state.get("mon_results", {})
+    _portfolio   = st.session_state.get("mon_portfolio", _portfolio)
 
-    st.info("**Próximas funcionalidades:** Alertas automáticas · "
-            "Umbrales por fase fenológica · Reporte de monitoreo PDF.", icon="🔜")
+    # ── Tabla resumen del portafolio ──────────────────────────────────────────
+    if _results_map:
+        st.markdown("---")
+        st.markdown("### 🗂️ Portafolio Activo")
+
+        _rows = []
+        for _p in _portfolio:
+            _nm  = _p["nombre_predio"]
+            _res = _results_map.get(_nm, {})
+            if "error" in _res:
+                _row_sems = ["❌", "❌", "❌"]
+            else:
+                _row_sems = [
+                    SEM_ICON.get(_res.get("Hoy",      {}).get("global", "verde"), "⚪"),
+                    SEM_ICON.get(_res.get("+7 días",  {}).get("global", "verde"), "⚪"),
+                    SEM_ICON.get(_res.get("+14 días", {}).get("global", "verde"), "⚪"),
+                ]
+            _rows.append({
+                "Predio":            _nm,
+                "Cultivo":           _p["cultivo"],
+                "Desembolso":        str(_p.get("fecha_desembolso", "—"))[:10],
+                "Alerta Hoy":        _row_sems[0],
+                "Alerta +7d":        _row_sems[1],
+                "Alerta +14d":       _row_sems[2],
+            })
+
+        st.dataframe(
+            pd.DataFrame(_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # ── Panel de detalle ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🔍 Detalle por Predio")
+
+        _predio_names = [_p["nombre_predio"] for _p in _portfolio]
+        _sel_name = st.selectbox(
+            "Seleccionar predio para ver detalle",
+            _predio_names,
+            key="mon_sel_predio",
+        )
+        _sel_p   = next(_p for _p in _portfolio if _p["nombre_predio"] == _sel_name)
+        _sel_res = _results_map.get(_sel_name, {})
+
+        if "error" in _sel_res:
+            st.error(f"Error al calcular indicadores: {_sel_res['error']}")
+        else:
+            # Ficha del predio
+            _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+            with _dc1: kpi("Cultivo",    _sel_p["cultivo"])
+            with _dc2: kpi("Latitud",    f"{float(_sel_p['lat']):.4f}")
+            with _dc3: kpi("Longitud",   f"{float(_sel_p['lon']):.4f}")
+            with _dc4: kpi("Desembolso", str(_sel_p.get("fecha_desembolso", "—"))[:10])
+
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+            # Alerta global por horizonte (banner)
+            _hoy_g = _sel_res.get("Hoy",      {}).get("global", "verde")
+            _p7_g  = _sel_res.get("+7 días",  {}).get("global", "verde")
+            _p14_g = _sel_res.get("+14 días", {}).get("global", "verde")
+
+            _bc1, _bc2, _bc3 = st.columns(3)
+            for _bcol, _hlabel, _hg in [
+                (_bc1, "Hoy",      _hoy_g),
+                (_bc2, "+7 días",  _p7_g),
+                (_bc3, "+14 días", _p14_g),
+            ]:
+                with _bcol:
+                    st.markdown(
+                        f'<div style="background:{SEM_BG[_hg]};border:2px solid {SEM_BD[_hg]};'
+                        f'border-radius:8px;padding:8px 12px;text-align:center;margin-bottom:4px">'
+                        f'<span style="font-size:1.1rem;font-weight:700;color:{SEM_TEXT[_hg]}">'
+                        f'{SEM_ICON[_hg]} {_hlabel}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            # Indicadores por horizonte en columnas
+            _ic1, _ic2, _ic3 = st.columns(3)
+            for _icol, _hlabel in [(_ic1, "Hoy"), (_ic2, "+7 días"), (_ic3, "+14 días")]:
+                _h_res = _sel_res.get(_hlabel, {})
+                with _icol:
+                    for _ind_id, _ind in _h_res.items():
+                        if _ind_id == "global" or _ind is None:
+                            continue
+                        _s = _ind.get("semaforo", "verde")
+                        st.markdown(
+                            f'<div style="background:{SEM_BG[_s]};border-left:4px solid {SEM_BD[_s]};'
+                            f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
+                            f'<div style="font-size:0.72rem;font-weight:600;color:{SEM_TEXT[_s]}">'
+                            f'{SEM_ICON[_s]} {_ind.get("label","")}</div>'
+                            f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
+                            f'{_ind.get("display","")}</div>'
+                            f'<div style="font-size:0.68rem;color:#6b7280">'
+                            f'→ {_ind.get("action","")}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+            # Bloque A: NDVI (retrospectivo, requiere EOSDA API)
+            st.markdown("---")
+            with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2)", expanded=False):
+                st.info(
+                    "El análisis NDVI requiere la API key de EOSDA y el polígono catastral "
+                    "del predio. Disponible en el Tab de Validación Pre-Crédito una vez "
+                    "analizado el predio individualmente.",
+                    icon="ℹ️",
+                )
+    else:
+        st.markdown("---")
+        st.info(
+            "Pulsa **Calcular indicadores** para analizar el portafolio.",
+            icon="👆",
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TAB 3 · METODOLOGÍA
