@@ -611,59 +611,806 @@ with tab_inicio:
     st.markdown("---")
     if not st.session_state.get("analizado"):
         st.info("Introduce las coordenadas del predio y pulsa **Analizar predio**.")
-        st.stop()
+    else:
+        lat     = st.session_state["lat"]
+        lon     = st.session_state["lon"]
+        cultivo = st.session_state.get("cultivo","café")
 
-    lat     = st.session_state["lat"]
-    lon     = st.session_state["lon"]
-    cultivo = st.session_state.get("cultivo","café")
+        with st.spinner("Consultando base catastral..."):
+            predio = get_predio_por_punto(lat, lon)
 
-    with st.spinner("Consultando base catastral..."):
-        predio = get_predio_por_punto(lat, lon)
+        if predio is None:
+            st.warning("No se encontró ningún predio en las coordenadas indicadas.")
+        else:
+            st.session_state["predio"] = predio
 
-    if predio is None:
-        st.warning("No se encontró ningún predio en las coordenadas indicadas.")
-        st.stop()
+            st.markdown("#### 🗺️ Identificación del predio catastral")
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: st.metric("Código catastral", predio["codigo"])
+            with c2: st.metric("Departamento",     predio.get("departamento","—"))
+            with c3: st.metric("Área catastral",   f"{predio.get('area_ha','—')} ha")
+            with c4: st.metric("Cultivo",          cultivo.capitalize())
 
-    st.session_state["predio"] = predio
+            st_folium(mapa_predio_simple(lat, lon, predio),
+                      width=750, height=450, returned_objects=[])
+            st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
 
-    st.markdown("#### 🗺️ Identificación del predio catastral")
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: st.metric("Código catastral", predio["codigo"])
-    with c2: st.metric("Departamento",     predio.get("departamento","—"))
-    with c3: st.metric("Área catastral",   f"{predio.get('area_ha','—')} ha")
-    with c4: st.metric("Cultivo",          cultivo.capitalize())
+            import json as _json
+            st.download_button(
+                label="⬇️ Descargar GeoJSON del predio",
+                data=_json.dumps(predio["geojson"], ensure_ascii=False, indent=2),
+                file_name=f"predio_{predio['codigo']}.geojson",
+                mime="application/geo+json",
+            )
 
-    st_folium(mapa_predio_simple(lat, lon, predio),
-              width=750, height=450, returned_objects=[])
-    st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
+            st.markdown("---")
+            st.markdown("#### 👁️ Validación inicial de unidad productiva")
+            st.caption("Confirmación visual por el asesor basada en imágenes satelitales / visita de campo.")
+            _obs_opts = [
+                "Se observa unidad productiva / cultivo / área agropecuaria aparente",
+                "No se observa unidad productiva clara",
+                "Requiere validación manual",
+            ]
+            _obs_sel = st.radio("Observación del asesor:", _obs_opts, key="obs_unidad_productiva", index=0)
+            _obs_color = {"Se observa unidad productiva / cultivo / área agropecuaria aparente": "verde",
+                          "No se observa unidad productiva clara": "rojo",
+                          "Requiere validación manual": "naranja"}[_obs_sel]
+            st.session_state["obs_unidad_productiva_nivel"] = _obs_color
+            st.session_state["obs_unidad_productiva_texto"] = _obs_sel
 
-    import json as _json
-    st.download_button(
-        label="⬇️ Descargar GeoJSON del predio",
-        data=_json.dumps(predio["geojson"], ensure_ascii=False, indent=2),
-        file_name=f"predio_{predio['codigo']}.geojson",
-        mime="application/geo+json",
-    )
-
-    st.markdown("---")
-    st.markdown("#### 👁️ Validación inicial de unidad productiva")
-    st.caption("Confirmación visual por el asesor basada en imágenes satelitales / visita de campo.")
-    _obs_opts = [
-        "Se observa unidad productiva / cultivo / área agropecuaria aparente",
-        "No se observa unidad productiva clara",
-        "Requiere validación manual",
-    ]
-    _obs_sel = st.radio("Observación del asesor:", _obs_opts, key="obs_unidad_productiva", index=0)
-    _obs_color = {"Se observa unidad productiva / cultivo / área agropecuaria aparente": "verde",
-                  "No se observa unidad productiva clara": "rojo",
-                  "Requiere validación manual": "naranja"}[_obs_sel]
-    st.session_state["obs_unidad_productiva_nivel"] = _obs_color
-    st.session_state["obs_unidad_productiva_texto"] = _obs_sel
-
-    st.markdown("---")
-    st.markdown("👉 Navega a **Validación Pre-Crédito** para el análisis detallado.")
+            st.markdown("---")
+            st.markdown("👉 Navega a **Validación Pre-Crédito** para el análisis detallado.")
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  TAB 2 · MONITOREO DE PORTAFOLIO
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_monitoreo:
+    st.subheader("Monitoreo de Portafolio · Fase de Cobranza")
+    st.caption(
+        "Indicadores climáticos y productivos en tiempo real por predio activo. "
+        "Detecta señales de estrés antes de que se materialicen en mora."
+    )
+
+    # ── Gestión del portafolio ────────────────────────────────────────────────
+    with st.expander("📂 Gestión del Portafolio", expanded=True):
+        col_up, col_dl = st.columns([3, 1])
+        with col_up:
+            uploaded_port = st.file_uploader(
+                "Cargar portafolio (Excel)",
+                type=["xlsx"],
+                help="Columnas requeridas: nombre_predio · latitud · longitud · cultivo · fecha_desembolso (opcional)",
+                key="portfolio_upload",
+            )
+        with col_dl:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _tmpl_buf = io.BytesIO()
+            pd.DataFrame([{
+                "nombre_predio":    "Finca Ejemplo",
+                "latitud":          4.5000,
+                "longitud":        -74.3000,
+                "cultivo":          "Café",
+                "fecha_desembolso": "2025-01-15",
+            }]).to_excel(_tmpl_buf, index=False)
+            st.download_button(
+                "📥 Descargar Template",
+                data=_tmpl_buf.getvalue(),
+                file_name="template_portafolio.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    # ── Carga del portafolio ──────────────────────────────────────────────────
+    if uploaded_port is not None:
+        try:
+            _df_port = pd.read_excel(uploaded_port)
+            _missing = {"nombre_predio", "latitud", "longitud", "cultivo"} - set(_df_port.columns)
+            if _missing:
+                st.error(f"Columnas faltantes: {', '.join(_missing)}")
+                _portfolio = PORTFOLIO_DEFAULT
+            else:
+                _portfolio = _df_port.fillna("").to_dict("records")
+                st.success(f"Portafolio cargado: {len(_portfolio)} predios")
+        except Exception as _e:
+            st.error(f"Error al leer el archivo: {_e}")
+            _portfolio = PORTFOLIO_DEFAULT
+    else:
+        _portfolio = PORTFOLIO_DEFAULT
+        st.info(
+            "Usando portafolio de demostración · 5 predios agrícolas en Cundinamarca",
+            icon="ℹ️",
+        )
+
+    # ── Botón de cálculo ──────────────────────────────────────────────────────
+    _col_btn, _ = st.columns([1, 3])
+    with _col_btn:
+        _calc_btn = st.button(
+            "📊 Calcular indicadores",
+            type="primary",
+            use_container_width=True,
+            key="btn_calc_monitoring",
+        )
+
+    if _calc_btn:
+        _results_map: dict = {}
+        _prog = st.progress(0, text="Iniciando descarga de datos climáticos...")
+        for _i, _p in enumerate(_portfolio):
+            _prog.progress(
+                (_i) / len(_portfolio),
+                text=f"Descargando datos para {_p['nombre_predio']} ({_i+1}/{len(_portfolio)})…",
+            )
+            try:
+                _series = _get_monitoring_cached(float(_p["lat"]), float(_p["lon"]))
+                _results_map[_p["nombre_predio"]] = compute_all_indicators(
+                    _series["combined_df"],
+                    str(_p["cultivo"]),
+                    _series["ytd_clim"],
+                    _series["today"],
+                )
+            except Exception as _e:
+                _results_map[_p["nombre_predio"]] = {"error": str(_e)}
+        _prog.progress(1.0, text="Listo.")
+        st.session_state["mon_results"]   = _results_map
+        st.session_state["mon_portfolio"] = _portfolio
+
+    _results_map = st.session_state.get("mon_results", {})
+    _portfolio   = st.session_state.get("mon_portfolio", _portfolio)
+
+    # ── Tabla resumen del portafolio ──────────────────────────────────────────
+    if _results_map:
+        st.markdown("---")
+        st.markdown("### 🗂️ Portafolio Activo")
+
+        _rows = []
+        for _p in _portfolio:
+            _nm  = _p["nombre_predio"]
+            _res = _results_map.get(_nm, {})
+            if "error" in _res:
+                _row_sems = ["❌", "❌", "❌"]
+            else:
+                _row_sems = [
+                    SEM_ICON.get(_res.get("Hoy",      {}).get("global", "verde"), "⚪"),
+                    SEM_ICON.get(_res.get("+7 días",  {}).get("global", "verde"), "⚪"),
+                    SEM_ICON.get(_res.get("+14 días", {}).get("global", "verde"), "⚪"),
+                ]
+            _rows.append({
+                "Predio":            _nm,
+                "Cultivo":           _p["cultivo"],
+                "Desembolso":        str(_p.get("fecha_desembolso", "—"))[:10],
+                "Alerta Hoy":        _row_sems[0],
+                "Alerta +7d":        _row_sems[1],
+                "Alerta +14d":       _row_sems[2],
+            })
+
+        st.dataframe(
+            pd.DataFrame(_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # ── Panel de detalle ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🔍 Detalle por Predio")
+
+        _predio_names = [_p["nombre_predio"] for _p in _portfolio]
+        _sel_name = st.selectbox(
+            "Seleccionar predio para ver detalle",
+            _predio_names,
+            key="mon_sel_predio",
+        )
+        _sel_p   = next(_p for _p in _portfolio if _p["nombre_predio"] == _sel_name)
+        _sel_res = _results_map.get(_sel_name, {})
+
+        if "error" in _sel_res:
+            st.error(f"Error al calcular indicadores: {_sel_res['error']}")
+        else:
+            # Ficha del predio
+            _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+            with _dc1: kpi("Cultivo",    _sel_p["cultivo"])
+            with _dc2: kpi("Latitud",    f"{float(_sel_p['lat']):.4f}")
+            with _dc3: kpi("Longitud",   f"{float(_sel_p['lon']):.4f}")
+            with _dc4: kpi("Desembolso", str(_sel_p.get("fecha_desembolso", "—"))[:10])
+
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+            # Alerta global por horizonte (banner)
+            _hoy_g = _sel_res.get("Hoy",      {}).get("global", "verde")
+            _p7_g  = _sel_res.get("+7 días",  {}).get("global", "verde")
+            _p14_g = _sel_res.get("+14 días", {}).get("global", "verde")
+
+            _bc1, _bc2, _bc3 = st.columns(3)
+            for _bcol, _hlabel, _hg in [
+                (_bc1, "Hoy",      _hoy_g),
+                (_bc2, "+7 días",  _p7_g),
+                (_bc3, "+14 días", _p14_g),
+            ]:
+                with _bcol:
+                    st.markdown(
+                        f'<div style="background:{SEM_BG[_hg]};border:2px solid {SEM_BD[_hg]};'
+                        f'border-radius:8px;padding:8px 12px;text-align:center;margin-bottom:4px">'
+                        f'<span style="font-size:1.1rem;font-weight:700;color:{SEM_TEXT[_hg]}">'
+                        f'{SEM_ICON[_hg]} {_hlabel}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            # Indicadores por horizonte en columnas
+            _ic1, _ic2, _ic3 = st.columns(3)
+            for _icol, _hlabel in [(_ic1, "Hoy"), (_ic2, "+7 días"), (_ic3, "+14 días")]:
+                _h_res = _sel_res.get(_hlabel, {})
+                with _icol:
+                    for _ind_id, _ind in _h_res.items():
+                        if _ind_id == "global" or _ind is None:
+                            continue
+                        _s = _ind.get("semaforo", "verde")
+                        st.markdown(
+                            f'<div style="background:{SEM_BG[_s]};border-left:4px solid {SEM_BD[_s]};'
+                            f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
+                            f'<div style="font-size:0.72rem;font-weight:600;color:{SEM_TEXT[_s]}">'
+                            f'{SEM_ICON[_s]} {_ind.get("label","")}</div>'
+                            f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
+                            f'{_ind.get("display","")}</div>'
+                            f'<div style="font-size:0.68rem;color:#6b7280">'
+                            f'→ {_ind.get("action","")}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+            # Bloque A: NDVI (retrospectivo, Sentinel-2 via EOSDA)
+            st.markdown("---")
+            with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2)", expanded=True):
+                st.caption(
+                    "Anomalía NDVI vs. media histórica del mismo mes (A1) y tendencia "
+                    "entre escenas consecutivas (A2). Solo retrospectivo — sin forecast satelital."
+                )
+                _ndvi_cache_key = f"mon_ndvi_{_sel_name}"
+
+                # API key EOSDA
+                try:
+                    _eosda_key = st.secrets.get("EOSDA_API_KEY", "")
+                except Exception:
+                    import os as _os
+                    _eosda_key = _os.environ.get("EOSDA_API_KEY", "")
+
+                if not _eosda_key:
+                    st.warning(
+                        "Análisis NDVI no disponible: configura **EOSDA_API_KEY** "
+                        "en los secrets de Streamlit.",
+                        icon="⚠️",
+                    )
+                else:
+                    # Obtener polígono catastral desde PostGIS
+                    _lat_n = float(_sel_p["lat"])
+                    _lon_n = float(_sel_p["lon"])
+                    with st.spinner("Consultando polígono catastral…"):
+                        _predio_data = _get_predio_monitoring_cached(_lat_n, _lon_n)
+
+                    if _predio_data and _predio_data.get("geojson"):
+                        _gjson = json.dumps(_predio_data["geojson"])
+                        _area_ha = _predio_data.get("area_ha", "?")
+                        _codigo  = _predio_data.get("codigo", "—")
+                        st.caption(f"Polígono catastral: `{_codigo}` · {_area_ha} ha")
+                    else:
+                        # Fallback: bbox 500 m × 500 m
+                        _d = 0.0025
+                        _gjson = json.dumps({
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [_lon_n - _d, _lat_n - _d],
+                                [_lon_n + _d, _lat_n - _d],
+                                [_lon_n + _d, _lat_n + _d],
+                                [_lon_n - _d, _lat_n + _d],
+                                [_lon_n - _d, _lat_n - _d],
+                            ]],
+                        })
+                        st.caption(
+                            "⚠️ Predio no encontrado en catastro — usando área aproximada de 500 m × 500 m"
+                        )
+
+                    _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
+
+                    if _btn_ndvi:
+                        with st.spinner("Consultando Sentinel-2 vía EOSDA Field Analytics (puede tardar ~30 s)…"):
+                            try:
+                                _scenes = _get_monitoring_ndvi_cached(
+                                    _gjson, 3, _eosda_key
+                                )
+                                st.session_state[_ndvi_cache_key] = _scenes
+                            except Exception as _e:
+                                st.error(f"Error EOSDA: {_e}")
+                                st.session_state.pop(_ndvi_cache_key, None)
+
+                    _scenes = st.session_state.get(_ndvi_cache_key)
+
+                    if _scenes is None:
+                        st.info(
+                            "Pulsa **Calcular NDVI** para consultar las escenas Sentinel-2.",
+                            icon="👆",
+                        )
+                    elif len(_scenes) == 0:
+                        st.warning(
+                            "No se obtuvieron escenas válidas (nubes <20%) para este predio "
+                            "en los últimos 3 años."
+                        )
+                    else:
+                        _df_sc = pd.DataFrame(_scenes).copy()
+                        _df_sc["date"]  = pd.to_datetime(_df_sc["date"])
+                        _df_sc["month"] = _df_sc["date"].dt.month
+                        _df_sc = _df_sc.sort_values("date").reset_index(drop=True)
+
+                        _monthly_hist = _df_sc.groupby("month")["median"].mean()
+                        _last     = _df_sc.iloc[-1]
+                        _ndvi_c   = float(_last["median"])
+                        _last_d   = _last["date"]
+                        _days_lag = (date.today() - _last_d.date()).days
+                        _hist_m   = float(_monthly_hist.get(_last_d.month, np.nan))
+
+                        # A1: anomalía
+                        _a1_pct = ((_ndvi_c - _hist_m) / _hist_m * 100
+                                   if not pd.isna(_hist_m) and _hist_m > 0 else np.nan)
+                        _a1_sem = ("verde"    if pd.isna(_a1_pct) or _a1_pct > -10
+                                   else "amarillo" if _a1_pct > -25 else "rojo")
+
+                        # A2: tendencia
+                        if len(_df_sc) >= 2:
+                            _a2_val = round(_ndvi_c - float(_df_sc.iloc[-2]["median"]), 3)
+                            _a2_sem = ("verde" if _a2_val >= -0.02
+                                       else "amarillo" if _a2_val >= -0.05 else "rojo")
+                        else:
+                            _a2_val, _a2_sem = np.nan, "verde"
+
+                        st.caption(
+                            f"Última escena: **{_last_d.strftime('%d %b %Y')}** · "
+                            f"rezago {_days_lag} días · nubes <20% · "
+                            f"{len(_df_sc)} escenas válidas en 3 años"
+                        )
+
+                        _a_actions = {
+                            "A1": {
+                                "verde":    "Sin acción requerida.",
+                                "amarillo": "Llamada al agricultor; registrar en expediente.",
+                                "rojo":     "Solicitar fotos + visita técnica; activar documentación seguro.",
+                            },
+                            "A2": {
+                                "verde":    "Sin acción requerida.",
+                                "amarillo": "Monitorear próxima imagen Sentinel-2 con prioridad.",
+                                "rojo":     "Si A1 también en rojo: activar protocolo de alivio.",
+                            },
+                        }
+                        _ca1, _ca2 = st.columns(2)
+                        for _acol, _aid, _alabel, _adisp, _asem in [
+                            (_ca1, "A1",
+                             "A1 · Anomalía NDVI vs. normal histórica mes",
+                             (f"{_ndvi_c:.3f}  ({_a1_pct:+.1f}%)" if not pd.isna(_a1_pct)
+                              else f"{_ndvi_c:.3f}  (sin normal histórica)"),
+                             _a1_sem),
+                            (_ca2, "A2",
+                             "A2 · Tendencia (vs. escena anterior)",
+                             (f"{_a2_val:+.3f}" if not pd.isna(_a2_val) else "Sin datos"),
+                             _a2_sem),
+                        ]:
+                            with _acol:
+                                st.markdown(
+                                    f'<div style="background:{SEM_BG[_asem]};'
+                                    f'border-left:4px solid {SEM_BD[_asem]};'
+                                    f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
+                                    f'<div style="font-size:0.72rem;font-weight:600;'
+                                    f'color:{SEM_TEXT[_asem]}">'
+                                    f'{SEM_ICON[_asem]} {_alabel}</div>'
+                                    f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
+                                    f'{_adisp}</div>'
+                                    f'<div style="font-size:0.68rem;color:#6b7280">'
+                                    f'→ {_a_actions[_aid][_asem]}</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+                        _fig_sc = px.scatter(
+                            _df_sc, x="date", y="median",
+                            labels={"date": "", "median": "NDVI mediano"},
+                            color_discrete_sequence=["#16a34a"],
+                            title="Serie NDVI · escenas Sentinel-2 (3 años, nubes <20%)",
+                        )
+                        if not pd.isna(_hist_m):
+                            _fig_sc.add_hline(
+                                y=_hist_m, line_dash="dash", line_color="#94a3b8",
+                                annotation_text=f"Normal mes {_last_d.month} ({_hist_m:.3f})",
+                                annotation_position="bottom right",
+                            )
+                        _fig_sc.update_traces(marker=dict(size=7))
+                        _fig_sc.update_layout(height=240, margin=dict(t=35, b=10))
+                        st.plotly_chart(_fig_sc, use_container_width=True)
+    else:
+        st.markdown("---")
+        st.info(
+            "Pulsa **Calcular indicadores** para analizar el portafolio.",
+            icon="👆",
+        )
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TAB 3 · METODOLOGÍA
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_metodologia:
+    _cult_m  = st.session_state.get("cultivo", "Café").lower().split("(")[0].strip()
+    _b2_m    = st.session_state.get("b2_result")
+    _thr_s   = f"{_b2_m['scene_threshold']:.2f}" if _b2_m else "0.35–0.50*"
+    _thr_p   = f"{_b2_m['peak_threshold']:.2f}"  if _b2_m else "0.45–0.60*"
+    _ndvi_th = st.session_state.get("ndvi_threshold", 0.25)
+
+    st.subheader("📖 Metodología y Criterios de Evaluación")
+    st.caption(
+        "Fuentes de datos, hipótesis, umbrales y tablas de decisión para cada bloque de la validación. "
+        "Los campos marcados con * varían según el cultivo seleccionado."
+    )
+
+    # ─── A · VALIDACIÓN GEOMÉTRICA Y LEGAL ───────────────────────────────────
+    with st.expander("📐 A · Validación Geométrica y Legal", expanded=True):
+
+        st.markdown("#### 🏛️ A1 · Existencia del Predio")
+        st.markdown("""
+**Descripción**
+Verifica que las coordenadas ingresadas correspondan a un polígono catastral registrado en la base IGAC almacenada en PostGIS.
+
+| Resultado | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| Polígono catastral identificado con geometría validada | 🟢 Verde | Sin restricción — continuar análisis |
+| Coordenadas fuera de cualquier predio catastral | 🔴 Rojo | Verificación manual con imágenes satelitales y fotos del solicitante |
+""")
+
+        st.markdown("---")
+        st.markdown("#### 🌿 A1 · Zona Agrícola — Frontera Agrícola Nacional")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Fuente de datos**
+Base de Frontera Agrícola Nacional (UPRA / IGAC) almacenada en PostGIS.
+La geometría del predio se intersecta con las capas de frontera para determinar
+en qué tipo de zona se ubica el suelo.
+
+**Hipótesis**
+Un predio dentro de la frontera agrícola estricta tiene menor riesgo de
+restricciones ambientales o legales que afecten la recuperación del crédito.
+Zonas condicionadas o excluidas aumentan el riesgo de incumplimiento o expropiación.
+""")
+        with c2:
+            st.markdown("""
+**Tabla de decisión**
+
+| Situación | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| Todo el predio en Frontera Agrícola **no condicionada** | 🟢 Verde | Sin restricción |
+| Al menos una parte en Frontera Agrícola **condicionada** | 🟡 Amarillo | Verificar restricción específica (ambiental, étnico-cultural, riesgo de desastres) y exigir plan de manejo |
+| Al menos una parte **fuera** de Frontera Agrícola | 🔴 Rojo | Zona de exclusión legal — no procede el crédito sin autorización ambiental expresa |
+
+**Tipos de condición en la capa**
+
+| Condición | Descripción |
+|-----------|-------------|
+| Frontera Agrícola no condicionada | Sin restricción legal |
+| Ambiental | Restricción por ecosistema frágil o área de protección ambiental |
+| Étnico-Cultural | Territorio colectivo, resguardo indígena o comunidad afro |
+| Gestión riesgo de desastres | Zona con amenaza por inundación, deslizamiento u otro evento |
+| Combinaciones (ej. Ambiental/Étnico-Cultural) | Coexistencia de múltiples restricciones |
+| Fuera de frontera | No pertenece a ninguna categoría de Frontera Agrícola — exclusión legal total |
+
+La lógica es conservadora: la presencia de **cualquier fracción** del predio fuera de frontera activa el semáforo rojo.
+""")
+
+        st.markdown("---")
+        st.markdown("#### 📏 A2 · Área Efectiva Cultivable")
+        st.markdown("""
+El área efectiva es el área total del predio menos la superficie no cultivable por tres fuentes de exclusión.
+Cuando A2-A (pendiente) y A2-C (NDVI) están calculados, se hace la **unión exacta píxel a píxel**,
+evitando el doble conteo de zonas que coinciden en múltiples capas.
+""")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"""
+**A2-A · Pendiente (DEM)**
+
+- Fuente: EOSDA API — DEM SRTM 30 m
+- Umbral configurable (default **25 %**)
+- Se excluyen los píxeles con pendiente superior al umbral
+
+| Pendiente | Clasificación |
+|-----------|--------------|
+| < umbral  | Cultivable   |
+| ≥ umbral  | Excluida     |
+""")
+        with c2:
+            st.markdown(f"""
+**A2-C · NDVI histórico (Sentinel-2)**
+
+- Fuente: Sentinel-2 L2A COG · Element84 Earth Search (sin API key)
+- Período: últimos **3 años**; filtro nubosidad SCL < 20 % dentro del predio
+- Estadístico: **P25 por píxel** — percentil 25 de todas las escenas válidas
+- Umbral actual: P25 ≥ **{_ndvi_th:.2f}** → productivo
+
+| NDVI P25 | Clasificación |
+|----------|--------------|
+| ≥ {_ndvi_th:.2f} | Productivo |
+| < {_ndvi_th:.2f} | Excluida del área efectiva |
+""")
+        with c3:
+            st.markdown("""
+**A2-B · Construcciones (Catastro)**
+
+- Fuente: IGAC · catastro nacional (PostGIS)
+- Las construcciones registradas se excluyen del área productiva
+- Se integran en la unión de máscaras para evitar solapamiento
+
+**Nota**: si la base catastral no tiene construcciones registradas, el área construida se suma directamente como exclusión sin rasterizar.
+""")
+        st.markdown(f"""
+**Semáforo de Área Efectiva**
+
+| % Área efectiva / Total | Semáforo | Acción recomendada |
+|-------------------------|----------|--------------------|
+| ≥ 70 % | 🟢 Verde | Sin restricción |
+| 40 – 70 % | 🟡 Amarillo | Revisar estructura de costos del proyecto; área disponible puede limitar el volumen de producción |
+| < 40 % | 🔴 Rojo | Viabilidad productiva comprometida; solicitar plan de uso alternativo del suelo |
+""")
+
+    # ─── B · CONTINUIDAD PRODUCTIVA ───────────────────────────────────────────
+    with st.expander("🌱 B · Continuidad Productiva", expanded=True):
+
+        st.markdown("#### 🌾 B1 · Aptitud al Cultivo")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+API de zonificación de aptitud por cultivo de la UPRA (datos.gov.co).
+Disponible para: café, cacao, aguacate, plátano, cebolla y otros cultivos priorizados.
+
+**Metodología**
+La intersección geométrica del predio con las zonas de aptitud genera un
+**score ponderado por área**:
+
+| Clase de aptitud | Peso |
+|-----------------|------|
+| Alta    | 1.00 |
+| Media   | 0.67 |
+| Baja    | 0.33 |
+| No apta | 0.00 |
+
+Score = Σ (área_clase × peso_clase) / área_total
+""")
+        with c2:
+            st.markdown(f"""
+**Hipótesis**
+Un predio con alta aptitud agrológica para el cultivo declarado tiene
+menor riesgo de pérdida de rendimiento por factores edáficos o climáticos
+estructurales, lo que mejora la capacidad de repago del crédito.
+
+**Tabla de decisión**
+
+| Score ponderado | Categoría | Semáforo | Acción |
+|----------------|-----------|----------|--------|
+| ≥ 0.70 | Alta    | 🟢 Verde    | Sin restricción |
+| 0.40 – 0.69 | Media | 🟡 Amarillo | Documentar plan de manejo agrícola |
+| < 0.40 | Baja / No apta | 🔴 Rojo | Evaluar viabilidad técnica del proyecto |
+""")
+
+        st.markdown("---")
+        st.markdown("#### 📊 B2 · Actividad Productiva (NDVI histórico)")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+Sentinel-2 L2A · EOSDA Field Analytics API.
+Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro AOI, no por tile completo).
+Período: últimos **3 años**, 3 peticiones en paralelo de 1 año cada una.
+
+**Hipótesis**
+Un predio productivo activo debería mostrar de forma recurrente valores
+de NDVI por encima del umbral fenológico del cultivo. La persistencia anual
+del pico máximo confirma que ha habido al menos un ciclo productivo por año.
+
+**Umbrales para *{_cult_m}*** *(calculados al ejecutar el análisis)*
+
+| Parámetro | Umbral aplicado |
+|-----------|----------------|
+| NDVI mínimo por escena (actividad activa) | ≥ {_thr_s} |
+| Pico NDVI anual (actividad estacional confirmada) | ≥ {_thr_p} |
+
+*Los umbrales varían por cultivo: hoja densa (plátano, aguacate) → mayor umbral;
+ciclo corto (papa, cebolla) → menor umbral.*
+""")
+        with c2:
+            st.markdown(f"""
+**Indicador 1 · % de escenas activas** (NDVI mediano ≥ {_thr_s})
+
+De todas las escenas del período, ¿qué fracción supera el umbral mínimo?
+Un valor alto indica vegetación activa recurrente.
+
+| % escenas activas | Semáforo |
+|-------------------|----------|
+| ≥ 40 %    | 🟢 Verde    |
+| 20 – 40 % | 🟡 Amarillo |
+| < 20 %    | 🔴 Rojo     |
+
+**Indicador 2 · Pico anual** (máximo NDVI del año ≥ {_thr_p})
+
+¿En cuántos años del período se registró al menos un pico productivo?
+
+| Años con pico | Semáforo |
+|---------------|----------|
+| Todos los años | 🟢 Verde    |
+| Todos menos 1  | 🟡 Amarillo |
+| < mitad de años | 🔴 Rojo   |
+
+**Semáforo final B2** = peor de los dos indicadores.
+
+| Color | Acción recomendada |
+|-------|--------------------|
+| 🟢 Verde    | Sin restricción adicional |
+| 🟡 Amarillo | Solicitar documentación de soporte (facturas, registros ICA, certificados de cosecha) |
+| 🔴 Rojo     | Inspección técnica presencial antes de aprobación del crédito |
+""")
+
+    # ─── C · INFRAESTRUCTURA ──────────────────────────────────────────────────
+    with st.expander("🏗️ C · Infraestructura Productiva", expanded=True):
+
+        st.markdown("""
+**Hipótesis**
+Un predio sin acceso vial o muy alejado de centros urbanos enfrenta mayores costos
+de transporte y riesgo de inaccesibilidad en épocas de lluvias, lo que reduce
+la rentabilidad y la capacidad de repago.
+""")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**C1 · Distancia al centro urbano más cercano**
+
+- Fuente: OpenStreetMap (OSM) + OSRM routing engine
+- Métrica: distancia por carretera (km) y tiempo estimado de conducción (min)
+- Búsqueda en radio de 80 km
+
+| Distancia | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| < 10 km   | 🟢 Verde    | Sin restricción |
+| 10 – 25 km | 🟡 Amarillo | Verificar costos de transporte en estructura del proyecto |
+| > 25 km   | 🔴 Rojo     | Riesgo logístico alto; verificar acceso a mercados y precios en finca |
+""")
+        with c2:
+            st.markdown("""
+**C2 · Distancia a vía transitable más cercana**
+
+- Fuente: OpenStreetMap (OSM)
+- Métrica: distancia en línea recta al punto más cercano en vía clasificada
+- Búsqueda en radio de 5 km
+
+| Distancia | Semáforo | Acción recomendada |
+|-----------|----------|--------------------|
+| < 500 m    | 🟢 Verde    | Sin restricción |
+| 500 m – 2 km | 🟡 Amarillo | Verificar condición de la vía en temporada de lluvias |
+| > 2 km     | 🔴 Rojo     | Riesgo de inaccesibilidad; costos del primer tramo pueden inviabilizar el negocio |
+
+**Semáforo global C** = peor resultado entre C1 y C2.
+""")
+
+    # ─── D · RIESGO AGROCLIMÁTICO ─────────────────────────────────────────────
+    with st.expander("🌧️ D · Riesgo Agroclimático", expanded=True):
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+**Fuente de datos**
+ERA5 reanalysis vía Open-Meteo · **10 años** de historia diaria.
+Variables: precipitación, temperatura máx/mín/media, humedad relativa, velocidad del viento.
+
+**Indicadores por cultivo**
+Los indicadores de riesgo son **específicos al cultivo** seleccionado como input.
+Cada cultivo tiene su propia selección de indicadores, meses de cálculo y curvas de vulnerabilidad,
+calibradas según su fenología y sus umbrales agronómicos de tolerancia.
+El cultivo activo actualmente es: **{_cult_m.capitalize()}**.
+
+**Metodología**
+1. Se calculan indicadores de riesgo anualmente para cada año del período.
+2. Para la evaluación crediticia se usa el **percentil 80 (P80)** de cada indicador —
+   el escenario adverso que ocurre **1 de cada 5 años**.
+3. El score por indicador se interpola linealmente entre los umbrales de la
+   **curva de vulnerabilidad** (0 = sin riesgo, 1 = extremo).
+4. El score global por categoría toma el **peor indicador** de esa categoría.
+5. El score global D es la **media de los peores por categoría**.
+
+**Hipótesis**
+Usar el P80 captura el riesgo latente de años adversos que históricamente
+han causado pérdidas de cultivo, sin sobredimensionar los años normales.
+""")
+        with c2:
+            st.markdown("""
+**Tabla de decisión global D**
+
+| Score P80 | Nivel | Acción recomendada |
+|-----------|-------|--------------------|
+| 0.00 – 0.10 | 🟢 Sin riesgo | Sin restricción |
+| 0.10 – 0.25 | 🟢 Bajo | Seguimiento anual estándar |
+| 0.25 – 0.50 | 🟡 Medio | Cláusula de seguimiento trimestral |
+| 0.50 – 0.75 | 🔴 Alto | Seguro agrícola obligatorio |
+| 0.75 – 1.00 | 🚨 Extremo | Evaluar viabilidad del proyecto |
+
+**Actualización de curvas**
+Las curvas de vulnerabilidad están almacenadas en el fichero Excel:
+`datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx`
+
+Para modificar umbrales o añadir cultivos: editar el Excel y actualizar el backend
+(redeploy de la aplicación). Los cambios se aplican automáticamente en el
+siguiente cálculo de riesgo para ese cultivo.
+""")
+
+        st.markdown("---")
+        st.markdown("#### 📊 Indicadores por cultivo — curvas de vulnerabilidad")
+        st.caption(
+            "Tabla completa de indicadores de la matriz de vulnerabilidad. "
+            "Filtra por cultivo para ver los indicadores activos y sus umbrales."
+        )
+
+        try:
+            from pathlib import Path as _Path
+            _mx_path = _Path(__file__).parent / "datos" / "indicadores" / "matriz_vulnerabilidad_consolidada.xlsx"
+            _df_mx = pd.read_excel(_mx_path)
+            _df_mx = _df_mx[_df_mx["Cultivo_app"].str.contains("sin equivalente") == False].copy()
+
+            _mx_cols = [
+                "Cultivo_app", "Categoría_riesgo", "Nombre_indicador",
+                "Definición", "Meses_cálculo", "Unidad",
+                "Sin_riesgo_0", "Riesgo_bajo_0.25", "Riesgo_medio_0.5",
+                "Riesgo_alto_0.75", "Riesgo_extremo_1", "Forma_curva",
+            ]
+            _df_show = _df_mx[_mx_cols].rename(columns={
+                "Cultivo_app":       "Cultivo",
+                "Categoría_riesgo":  "Categoría",
+                "Nombre_indicador":  "Indicador",
+                "Definición":        "Definición",
+                "Meses_cálculo":     "Meses",
+                "Unidad":            "Unidad",
+                "Sin_riesgo_0":      "Sin riesgo",
+                "Riesgo_bajo_0.25":  "Bajo (0.25)",
+                "Riesgo_medio_0.5":  "Medio (0.50)",
+                "Riesgo_alto_0.75":  "Alto (0.75)",
+                "Riesgo_extremo_1":  "Extremo (1.0)",
+                "Forma_curva":       "Curva",
+            })
+
+            for _col in ["Sin riesgo", "Bajo (0.25)", "Medio (0.50)", "Alto (0.75)", "Extremo (1.0)"]:
+                if _col in _df_show.columns:
+                    _df_show[_col] = _df_show[_col].astype(str)
+            _cultivos_mx = sorted(_df_show["Cultivo"].unique().tolist())
+            _default_cult = (
+                _cult_m.capitalize()
+                if _cult_m.capitalize() in _cultivos_mx
+                else _cultivos_mx[0]
+            )
+            _sel_cult = st.selectbox(
+                "Filtrar por cultivo",
+                options=["Todos"] + _cultivos_mx,
+                index=_cultivos_mx.index(_default_cult) + 1
+                if _default_cult in _cultivos_mx else 0,
+                key="met_cult_filter",
+            )
+            _df_filt = (
+                _df_show if _sel_cult == "Todos"
+                else _df_show[_df_show["Cultivo"] == _sel_cult]
+            )
+            st.dataframe(
+                _df_filt.reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Definición":  st.column_config.TextColumn(width="large"),
+                    "Indicador":   st.column_config.TextColumn(width="medium"),
+                    "Meses":       st.column_config.TextColumn(width="small"),
+                    "Curva":       st.column_config.TextColumn(width="medium"),
+                },
+            )
+            st.caption(
+                f"📁 Fuente: `datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx` · "
+                f"{len(_df_filt)} indicadores mostrados · "
+                "Para modificar umbrales o añadir cultivos, editar el Excel y actualizar el backend."
+            )
+        except Exception as _e_mx:
+            st.warning(f"No se pudo cargar la matriz de vulnerabilidad: {_e_mx}")
 #  TAB 1 · VALIDACIÓN PRE-CRÉDITO
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_validacion:
@@ -672,8 +1419,11 @@ with tab_validacion:
     cultivo = st.session_state.get("cultivo", d.get("cultivo","café"))
 
     if predio is None:
-        st.info("Primero analiza un predio en el tab **Inicio**.")
-        st.stop()
+        st.info(
+            "👆 Ingresa las coordenadas y el cultivo en la pestaña "
+            "**🏠 Inicio · Ingreso del Predio** y pulsa **Analizar predio**."
+        )
+        st.stop()  # último bloque — st.stop() ya no bloquea otras pestañas
 
     municipio_real    = predio.get("municipio","")
     departamento_real = predio.get("departamento","")
@@ -2149,752 +2899,3 @@ with tab_validacion:
             )
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 2 · MONITOREO DE PORTAFOLIO
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_monitoreo:
-    st.subheader("Monitoreo de Portafolio · Fase de Cobranza")
-    st.caption(
-        "Indicadores climáticos y productivos en tiempo real por predio activo. "
-        "Detecta señales de estrés antes de que se materialicen en mora."
-    )
-
-    # ── Gestión del portafolio ────────────────────────────────────────────────
-    with st.expander("📂 Gestión del Portafolio", expanded=True):
-        col_up, col_dl = st.columns([3, 1])
-        with col_up:
-            uploaded_port = st.file_uploader(
-                "Cargar portafolio (Excel)",
-                type=["xlsx"],
-                help="Columnas requeridas: nombre_predio · latitud · longitud · cultivo · fecha_desembolso (opcional)",
-                key="portfolio_upload",
-            )
-        with col_dl:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _tmpl_buf = io.BytesIO()
-            pd.DataFrame([{
-                "nombre_predio":    "Finca Ejemplo",
-                "latitud":          4.5000,
-                "longitud":        -74.3000,
-                "cultivo":          "Café",
-                "fecha_desembolso": "2025-01-15",
-            }]).to_excel(_tmpl_buf, index=False)
-            st.download_button(
-                "📥 Descargar Template",
-                data=_tmpl_buf.getvalue(),
-                file_name="template_portafolio.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-    # ── Carga del portafolio ──────────────────────────────────────────────────
-    if uploaded_port is not None:
-        try:
-            _df_port = pd.read_excel(uploaded_port)
-            _missing = {"nombre_predio", "latitud", "longitud", "cultivo"} - set(_df_port.columns)
-            if _missing:
-                st.error(f"Columnas faltantes: {', '.join(_missing)}")
-                _portfolio = PORTFOLIO_DEFAULT
-            else:
-                _portfolio = _df_port.fillna("").to_dict("records")
-                st.success(f"Portafolio cargado: {len(_portfolio)} predios")
-        except Exception as _e:
-            st.error(f"Error al leer el archivo: {_e}")
-            _portfolio = PORTFOLIO_DEFAULT
-    else:
-        _portfolio = PORTFOLIO_DEFAULT
-        st.info(
-            "Usando portafolio de demostración · 5 predios agrícolas en Cundinamarca",
-            icon="ℹ️",
-        )
-
-    # ── Botón de cálculo ──────────────────────────────────────────────────────
-    _col_btn, _ = st.columns([1, 3])
-    with _col_btn:
-        _calc_btn = st.button(
-            "📊 Calcular indicadores",
-            type="primary",
-            use_container_width=True,
-            key="btn_calc_monitoring",
-        )
-
-    if _calc_btn:
-        _results_map: dict = {}
-        _prog = st.progress(0, text="Iniciando descarga de datos climáticos...")
-        for _i, _p in enumerate(_portfolio):
-            _prog.progress(
-                (_i) / len(_portfolio),
-                text=f"Descargando datos para {_p['nombre_predio']} ({_i+1}/{len(_portfolio)})…",
-            )
-            try:
-                _series = _get_monitoring_cached(float(_p["lat"]), float(_p["lon"]))
-                _results_map[_p["nombre_predio"]] = compute_all_indicators(
-                    _series["combined_df"],
-                    str(_p["cultivo"]),
-                    _series["ytd_clim"],
-                    _series["today"],
-                )
-            except Exception as _e:
-                _results_map[_p["nombre_predio"]] = {"error": str(_e)}
-        _prog.progress(1.0, text="Listo.")
-        st.session_state["mon_results"]   = _results_map
-        st.session_state["mon_portfolio"] = _portfolio
-
-    _results_map = st.session_state.get("mon_results", {})
-    _portfolio   = st.session_state.get("mon_portfolio", _portfolio)
-
-    # ── Tabla resumen del portafolio ──────────────────────────────────────────
-    if _results_map:
-        st.markdown("---")
-        st.markdown("### 🗂️ Portafolio Activo")
-
-        _rows = []
-        for _p in _portfolio:
-            _nm  = _p["nombre_predio"]
-            _res = _results_map.get(_nm, {})
-            if "error" in _res:
-                _row_sems = ["❌", "❌", "❌"]
-            else:
-                _row_sems = [
-                    SEM_ICON.get(_res.get("Hoy",      {}).get("global", "verde"), "⚪"),
-                    SEM_ICON.get(_res.get("+7 días",  {}).get("global", "verde"), "⚪"),
-                    SEM_ICON.get(_res.get("+14 días", {}).get("global", "verde"), "⚪"),
-                ]
-            _rows.append({
-                "Predio":            _nm,
-                "Cultivo":           _p["cultivo"],
-                "Desembolso":        str(_p.get("fecha_desembolso", "—"))[:10],
-                "Alerta Hoy":        _row_sems[0],
-                "Alerta +7d":        _row_sems[1],
-                "Alerta +14d":       _row_sems[2],
-            })
-
-        st.dataframe(
-            pd.DataFrame(_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # ── Panel de detalle ──────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 🔍 Detalle por Predio")
-
-        _predio_names = [_p["nombre_predio"] for _p in _portfolio]
-        _sel_name = st.selectbox(
-            "Seleccionar predio para ver detalle",
-            _predio_names,
-            key="mon_sel_predio",
-        )
-        _sel_p   = next(_p for _p in _portfolio if _p["nombre_predio"] == _sel_name)
-        _sel_res = _results_map.get(_sel_name, {})
-
-        if "error" in _sel_res:
-            st.error(f"Error al calcular indicadores: {_sel_res['error']}")
-        else:
-            # Ficha del predio
-            _dc1, _dc2, _dc3, _dc4 = st.columns(4)
-            with _dc1: kpi("Cultivo",    _sel_p["cultivo"])
-            with _dc2: kpi("Latitud",    f"{float(_sel_p['lat']):.4f}")
-            with _dc3: kpi("Longitud",   f"{float(_sel_p['lon']):.4f}")
-            with _dc4: kpi("Desembolso", str(_sel_p.get("fecha_desembolso", "—"))[:10])
-
-            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-            # Alerta global por horizonte (banner)
-            _hoy_g = _sel_res.get("Hoy",      {}).get("global", "verde")
-            _p7_g  = _sel_res.get("+7 días",  {}).get("global", "verde")
-            _p14_g = _sel_res.get("+14 días", {}).get("global", "verde")
-
-            _bc1, _bc2, _bc3 = st.columns(3)
-            for _bcol, _hlabel, _hg in [
-                (_bc1, "Hoy",      _hoy_g),
-                (_bc2, "+7 días",  _p7_g),
-                (_bc3, "+14 días", _p14_g),
-            ]:
-                with _bcol:
-                    st.markdown(
-                        f'<div style="background:{SEM_BG[_hg]};border:2px solid {SEM_BD[_hg]};'
-                        f'border-radius:8px;padding:8px 12px;text-align:center;margin-bottom:4px">'
-                        f'<span style="font-size:1.1rem;font-weight:700;color:{SEM_TEXT[_hg]}">'
-                        f'{SEM_ICON[_hg]} {_hlabel}</span></div>',
-                        unsafe_allow_html=True,
-                    )
-
-            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-            # Indicadores por horizonte en columnas
-            _ic1, _ic2, _ic3 = st.columns(3)
-            for _icol, _hlabel in [(_ic1, "Hoy"), (_ic2, "+7 días"), (_ic3, "+14 días")]:
-                _h_res = _sel_res.get(_hlabel, {})
-                with _icol:
-                    for _ind_id, _ind in _h_res.items():
-                        if _ind_id == "global" or _ind is None:
-                            continue
-                        _s = _ind.get("semaforo", "verde")
-                        st.markdown(
-                            f'<div style="background:{SEM_BG[_s]};border-left:4px solid {SEM_BD[_s]};'
-                            f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
-                            f'<div style="font-size:0.72rem;font-weight:600;color:{SEM_TEXT[_s]}">'
-                            f'{SEM_ICON[_s]} {_ind.get("label","")}</div>'
-                            f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
-                            f'{_ind.get("display","")}</div>'
-                            f'<div style="font-size:0.68rem;color:#6b7280">'
-                            f'→ {_ind.get("action","")}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-            # Bloque A: NDVI (retrospectivo, Sentinel-2 via EOSDA)
-            st.markdown("---")
-            with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2)", expanded=True):
-                st.caption(
-                    "Anomalía NDVI vs. media histórica del mismo mes (A1) y tendencia "
-                    "entre escenas consecutivas (A2). Solo retrospectivo — sin forecast satelital."
-                )
-                _ndvi_cache_key = f"mon_ndvi_{_sel_name}"
-
-                # API key EOSDA
-                try:
-                    _eosda_key = st.secrets.get("EOSDA_API_KEY", "")
-                except Exception:
-                    import os as _os
-                    _eosda_key = _os.environ.get("EOSDA_API_KEY", "")
-
-                if not _eosda_key:
-                    st.warning(
-                        "Análisis NDVI no disponible: configura **EOSDA_API_KEY** "
-                        "en los secrets de Streamlit.",
-                        icon="⚠️",
-                    )
-                else:
-                    # Obtener polígono catastral desde PostGIS
-                    _lat_n = float(_sel_p["lat"])
-                    _lon_n = float(_sel_p["lon"])
-                    with st.spinner("Consultando polígono catastral…"):
-                        _predio_data = _get_predio_monitoring_cached(_lat_n, _lon_n)
-
-                    if _predio_data and _predio_data.get("geojson"):
-                        _gjson = json.dumps(_predio_data["geojson"])
-                        _area_ha = _predio_data.get("area_ha", "?")
-                        _codigo  = _predio_data.get("codigo", "—")
-                        st.caption(f"Polígono catastral: `{_codigo}` · {_area_ha} ha")
-                    else:
-                        # Fallback: bbox 500 m × 500 m
-                        _d = 0.0025
-                        _gjson = json.dumps({
-                            "type": "Polygon",
-                            "coordinates": [[
-                                [_lon_n - _d, _lat_n - _d],
-                                [_lon_n + _d, _lat_n - _d],
-                                [_lon_n + _d, _lat_n + _d],
-                                [_lon_n - _d, _lat_n + _d],
-                                [_lon_n - _d, _lat_n - _d],
-                            ]],
-                        })
-                        st.caption(
-                            "⚠️ Predio no encontrado en catastro — usando área aproximada de 500 m × 500 m"
-                        )
-
-                    _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
-
-                    if _btn_ndvi:
-                        with st.spinner("Consultando Sentinel-2 vía EOSDA Field Analytics (puede tardar ~30 s)…"):
-                            try:
-                                _scenes = _get_monitoring_ndvi_cached(
-                                    _gjson, 3, _eosda_key
-                                )
-                                st.session_state[_ndvi_cache_key] = _scenes
-                            except Exception as _e:
-                                st.error(f"Error EOSDA: {_e}")
-                                st.session_state.pop(_ndvi_cache_key, None)
-
-                    _scenes = st.session_state.get(_ndvi_cache_key)
-
-                    if _scenes is None:
-                        st.info(
-                            "Pulsa **Calcular NDVI** para consultar las escenas Sentinel-2.",
-                            icon="👆",
-                        )
-                    elif len(_scenes) == 0:
-                        st.warning(
-                            "No se obtuvieron escenas válidas (nubes <20%) para este predio "
-                            "en los últimos 3 años."
-                        )
-                    else:
-                        _df_sc = pd.DataFrame(_scenes).copy()
-                        _df_sc["date"]  = pd.to_datetime(_df_sc["date"])
-                        _df_sc["month"] = _df_sc["date"].dt.month
-                        _df_sc = _df_sc.sort_values("date").reset_index(drop=True)
-
-                        _monthly_hist = _df_sc.groupby("month")["median"].mean()
-                        _last     = _df_sc.iloc[-1]
-                        _ndvi_c   = float(_last["median"])
-                        _last_d   = _last["date"]
-                        _days_lag = (date.today() - _last_d.date()).days
-                        _hist_m   = float(_monthly_hist.get(_last_d.month, np.nan))
-
-                        # A1: anomalía
-                        _a1_pct = ((_ndvi_c - _hist_m) / _hist_m * 100
-                                   if not pd.isna(_hist_m) and _hist_m > 0 else np.nan)
-                        _a1_sem = ("verde"    if pd.isna(_a1_pct) or _a1_pct > -10
-                                   else "amarillo" if _a1_pct > -25 else "rojo")
-
-                        # A2: tendencia
-                        if len(_df_sc) >= 2:
-                            _a2_val = round(_ndvi_c - float(_df_sc.iloc[-2]["median"]), 3)
-                            _a2_sem = ("verde" if _a2_val >= -0.02
-                                       else "amarillo" if _a2_val >= -0.05 else "rojo")
-                        else:
-                            _a2_val, _a2_sem = np.nan, "verde"
-
-                        st.caption(
-                            f"Última escena: **{_last_d.strftime('%d %b %Y')}** · "
-                            f"rezago {_days_lag} días · nubes <20% · "
-                            f"{len(_df_sc)} escenas válidas en 3 años"
-                        )
-
-                        _a_actions = {
-                            "A1": {
-                                "verde":    "Sin acción requerida.",
-                                "amarillo": "Llamada al agricultor; registrar en expediente.",
-                                "rojo":     "Solicitar fotos + visita técnica; activar documentación seguro.",
-                            },
-                            "A2": {
-                                "verde":    "Sin acción requerida.",
-                                "amarillo": "Monitorear próxima imagen Sentinel-2 con prioridad.",
-                                "rojo":     "Si A1 también en rojo: activar protocolo de alivio.",
-                            },
-                        }
-                        _ca1, _ca2 = st.columns(2)
-                        for _acol, _aid, _alabel, _adisp, _asem in [
-                            (_ca1, "A1",
-                             "A1 · Anomalía NDVI vs. normal histórica mes",
-                             (f"{_ndvi_c:.3f}  ({_a1_pct:+.1f}%)" if not pd.isna(_a1_pct)
-                              else f"{_ndvi_c:.3f}  (sin normal histórica)"),
-                             _a1_sem),
-                            (_ca2, "A2",
-                             "A2 · Tendencia (vs. escena anterior)",
-                             (f"{_a2_val:+.3f}" if not pd.isna(_a2_val) else "Sin datos"),
-                             _a2_sem),
-                        ]:
-                            with _acol:
-                                st.markdown(
-                                    f'<div style="background:{SEM_BG[_asem]};'
-                                    f'border-left:4px solid {SEM_BD[_asem]};'
-                                    f'border-radius:6px;padding:7px 10px;margin-bottom:7px">'
-                                    f'<div style="font-size:0.72rem;font-weight:600;'
-                                    f'color:{SEM_TEXT[_asem]}">'
-                                    f'{SEM_ICON[_asem]} {_alabel}</div>'
-                                    f'<div style="font-size:1rem;font-weight:700;margin:2px 0 3px 0">'
-                                    f'{_adisp}</div>'
-                                    f'<div style="font-size:0.68rem;color:#6b7280">'
-                                    f'→ {_a_actions[_aid][_asem]}</div>'
-                                    f'</div>',
-                                    unsafe_allow_html=True,
-                                )
-
-                        _fig_sc = px.scatter(
-                            _df_sc, x="date", y="median",
-                            labels={"date": "", "median": "NDVI mediano"},
-                            color_discrete_sequence=["#16a34a"],
-                            title="Serie NDVI · escenas Sentinel-2 (3 años, nubes <20%)",
-                        )
-                        if not pd.isna(_hist_m):
-                            _fig_sc.add_hline(
-                                y=_hist_m, line_dash="dash", line_color="#94a3b8",
-                                annotation_text=f"Normal mes {_last_d.month} ({_hist_m:.3f})",
-                                annotation_position="bottom right",
-                            )
-                        _fig_sc.update_traces(marker=dict(size=7))
-                        _fig_sc.update_layout(height=240, margin=dict(t=35, b=10))
-                        st.plotly_chart(_fig_sc, use_container_width=True)
-    else:
-        st.markdown("---")
-        st.info(
-            "Pulsa **Calcular indicadores** para analizar el portafolio.",
-            icon="👆",
-        )
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB 3 · METODOLOGÍA
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_metodologia:
-    _cult_m  = st.session_state.get("cultivo", "Café").lower().split("(")[0].strip()
-    _b2_m    = st.session_state.get("b2_result")
-    _thr_s   = f"{_b2_m['scene_threshold']:.2f}" if _b2_m else "0.35–0.50*"
-    _thr_p   = f"{_b2_m['peak_threshold']:.2f}"  if _b2_m else "0.45–0.60*"
-    _ndvi_th = st.session_state.get("ndvi_threshold", 0.25)
-
-    st.subheader("📖 Metodología y Criterios de Evaluación")
-    st.caption(
-        "Fuentes de datos, hipótesis, umbrales y tablas de decisión para cada bloque de la validación. "
-        "Los campos marcados con * varían según el cultivo seleccionado."
-    )
-
-    # ─── A · VALIDACIÓN GEOMÉTRICA Y LEGAL ───────────────────────────────────
-    with st.expander("📐 A · Validación Geométrica y Legal", expanded=True):
-
-        st.markdown("#### 🏛️ A1 · Existencia del Predio")
-        st.markdown("""
-**Descripción**
-Verifica que las coordenadas ingresadas correspondan a un polígono catastral registrado en la base IGAC almacenada en PostGIS.
-
-| Resultado | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| Polígono catastral identificado con geometría validada | 🟢 Verde | Sin restricción — continuar análisis |
-| Coordenadas fuera de cualquier predio catastral | 🔴 Rojo | Verificación manual con imágenes satelitales y fotos del solicitante |
-""")
-
-        st.markdown("---")
-        st.markdown("#### 🌿 A1 · Zona Agrícola — Frontera Agrícola Nacional")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("""
-**Fuente de datos**
-Base de Frontera Agrícola Nacional (UPRA / IGAC) almacenada en PostGIS.
-La geometría del predio se intersecta con las capas de frontera para determinar
-en qué tipo de zona se ubica el suelo.
-
-**Hipótesis**
-Un predio dentro de la frontera agrícola estricta tiene menor riesgo de
-restricciones ambientales o legales que afecten la recuperación del crédito.
-Zonas condicionadas o excluidas aumentan el riesgo de incumplimiento o expropiación.
-""")
-        with c2:
-            st.markdown("""
-**Tabla de decisión**
-
-| Situación | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| Todo el predio en Frontera Agrícola **no condicionada** | 🟢 Verde | Sin restricción |
-| Al menos una parte en Frontera Agrícola **condicionada** | 🟡 Amarillo | Verificar restricción específica (ambiental, étnico-cultural, riesgo de desastres) y exigir plan de manejo |
-| Al menos una parte **fuera** de Frontera Agrícola | 🔴 Rojo | Zona de exclusión legal — no procede el crédito sin autorización ambiental expresa |
-
-**Tipos de condición en la capa**
-
-| Condición | Descripción |
-|-----------|-------------|
-| Frontera Agrícola no condicionada | Sin restricción legal |
-| Ambiental | Restricción por ecosistema frágil o área de protección ambiental |
-| Étnico-Cultural | Territorio colectivo, resguardo indígena o comunidad afro |
-| Gestión riesgo de desastres | Zona con amenaza por inundación, deslizamiento u otro evento |
-| Combinaciones (ej. Ambiental/Étnico-Cultural) | Coexistencia de múltiples restricciones |
-| Fuera de frontera | No pertenece a ninguna categoría de Frontera Agrícola — exclusión legal total |
-
-La lógica es conservadora: la presencia de **cualquier fracción** del predio fuera de frontera activa el semáforo rojo.
-""")
-
-        st.markdown("---")
-        st.markdown("#### 📏 A2 · Área Efectiva Cultivable")
-        st.markdown("""
-El área efectiva es el área total del predio menos la superficie no cultivable por tres fuentes de exclusión.
-Cuando A2-A (pendiente) y A2-C (NDVI) están calculados, se hace la **unión exacta píxel a píxel**,
-evitando el doble conteo de zonas que coinciden en múltiples capas.
-""")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f"""
-**A2-A · Pendiente (DEM)**
-
-- Fuente: EOSDA API — DEM SRTM 30 m
-- Umbral configurable (default **25 %**)
-- Se excluyen los píxeles con pendiente superior al umbral
-
-| Pendiente | Clasificación |
-|-----------|--------------|
-| < umbral  | Cultivable   |
-| ≥ umbral  | Excluida     |
-""")
-        with c2:
-            st.markdown(f"""
-**A2-C · NDVI histórico (Sentinel-2)**
-
-- Fuente: Sentinel-2 L2A COG · Element84 Earth Search (sin API key)
-- Período: últimos **3 años**; filtro nubosidad SCL < 20 % dentro del predio
-- Estadístico: **P25 por píxel** — percentil 25 de todas las escenas válidas
-- Umbral actual: P25 ≥ **{_ndvi_th:.2f}** → productivo
-
-| NDVI P25 | Clasificación |
-|----------|--------------|
-| ≥ {_ndvi_th:.2f} | Productivo |
-| < {_ndvi_th:.2f} | Excluida del área efectiva |
-""")
-        with c3:
-            st.markdown("""
-**A2-B · Construcciones (Catastro)**
-
-- Fuente: IGAC · catastro nacional (PostGIS)
-- Las construcciones registradas se excluyen del área productiva
-- Se integran en la unión de máscaras para evitar solapamiento
-
-**Nota**: si la base catastral no tiene construcciones registradas, el área construida se suma directamente como exclusión sin rasterizar.
-""")
-        st.markdown(f"""
-**Semáforo de Área Efectiva**
-
-| % Área efectiva / Total | Semáforo | Acción recomendada |
-|-------------------------|----------|--------------------|
-| ≥ 70 % | 🟢 Verde | Sin restricción |
-| 40 – 70 % | 🟡 Amarillo | Revisar estructura de costos del proyecto; área disponible puede limitar el volumen de producción |
-| < 40 % | 🔴 Rojo | Viabilidad productiva comprometida; solicitar plan de uso alternativo del suelo |
-""")
-
-    # ─── B · CONTINUIDAD PRODUCTIVA ───────────────────────────────────────────
-    with st.expander("🌱 B · Continuidad Productiva", expanded=True):
-
-        st.markdown("#### 🌾 B1 · Aptitud al Cultivo")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"""
-**Fuente de datos**
-API de zonificación de aptitud por cultivo de la UPRA (datos.gov.co).
-Disponible para: café, cacao, aguacate, plátano, cebolla y otros cultivos priorizados.
-
-**Metodología**
-La intersección geométrica del predio con las zonas de aptitud genera un
-**score ponderado por área**:
-
-| Clase de aptitud | Peso |
-|-----------------|------|
-| Alta    | 1.00 |
-| Media   | 0.67 |
-| Baja    | 0.33 |
-| No apta | 0.00 |
-
-Score = Σ (área_clase × peso_clase) / área_total
-""")
-        with c2:
-            st.markdown(f"""
-**Hipótesis**
-Un predio con alta aptitud agrológica para el cultivo declarado tiene
-menor riesgo de pérdida de rendimiento por factores edáficos o climáticos
-estructurales, lo que mejora la capacidad de repago del crédito.
-
-**Tabla de decisión**
-
-| Score ponderado | Categoría | Semáforo | Acción |
-|----------------|-----------|----------|--------|
-| ≥ 0.70 | Alta    | 🟢 Verde    | Sin restricción |
-| 0.40 – 0.69 | Media | 🟡 Amarillo | Documentar plan de manejo agrícola |
-| < 0.40 | Baja / No apta | 🔴 Rojo | Evaluar viabilidad técnica del proyecto |
-""")
-
-        st.markdown("---")
-        st.markdown("#### 📊 B2 · Actividad Productiva (NDVI histórico)")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"""
-**Fuente de datos**
-Sentinel-2 L2A · EOSDA Field Analytics API.
-Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro AOI, no por tile completo).
-Período: últimos **3 años**, 3 peticiones en paralelo de 1 año cada una.
-
-**Hipótesis**
-Un predio productivo activo debería mostrar de forma recurrente valores
-de NDVI por encima del umbral fenológico del cultivo. La persistencia anual
-del pico máximo confirma que ha habido al menos un ciclo productivo por año.
-
-**Umbrales para *{_cult_m}*** *(calculados al ejecutar el análisis)*
-
-| Parámetro | Umbral aplicado |
-|-----------|----------------|
-| NDVI mínimo por escena (actividad activa) | ≥ {_thr_s} |
-| Pico NDVI anual (actividad estacional confirmada) | ≥ {_thr_p} |
-
-*Los umbrales varían por cultivo: hoja densa (plátano, aguacate) → mayor umbral;
-ciclo corto (papa, cebolla) → menor umbral.*
-""")
-        with c2:
-            st.markdown(f"""
-**Indicador 1 · % de escenas activas** (NDVI mediano ≥ {_thr_s})
-
-De todas las escenas del período, ¿qué fracción supera el umbral mínimo?
-Un valor alto indica vegetación activa recurrente.
-
-| % escenas activas | Semáforo |
-|-------------------|----------|
-| ≥ 40 %    | 🟢 Verde    |
-| 20 – 40 % | 🟡 Amarillo |
-| < 20 %    | 🔴 Rojo     |
-
-**Indicador 2 · Pico anual** (máximo NDVI del año ≥ {_thr_p})
-
-¿En cuántos años del período se registró al menos un pico productivo?
-
-| Años con pico | Semáforo |
-|---------------|----------|
-| Todos los años | 🟢 Verde    |
-| Todos menos 1  | 🟡 Amarillo |
-| < mitad de años | 🔴 Rojo   |
-
-**Semáforo final B2** = peor de los dos indicadores.
-
-| Color | Acción recomendada |
-|-------|--------------------|
-| 🟢 Verde    | Sin restricción adicional |
-| 🟡 Amarillo | Solicitar documentación de soporte (facturas, registros ICA, certificados de cosecha) |
-| 🔴 Rojo     | Inspección técnica presencial antes de aprobación del crédito |
-""")
-
-    # ─── C · INFRAESTRUCTURA ──────────────────────────────────────────────────
-    with st.expander("🏗️ C · Infraestructura Productiva", expanded=True):
-
-        st.markdown("""
-**Hipótesis**
-Un predio sin acceso vial o muy alejado de centros urbanos enfrenta mayores costos
-de transporte y riesgo de inaccesibilidad en épocas de lluvias, lo que reduce
-la rentabilidad y la capacidad de repago.
-""")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("""
-**C1 · Distancia al centro urbano más cercano**
-
-- Fuente: OpenStreetMap (OSM) + OSRM routing engine
-- Métrica: distancia por carretera (km) y tiempo estimado de conducción (min)
-- Búsqueda en radio de 80 km
-
-| Distancia | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| < 10 km   | 🟢 Verde    | Sin restricción |
-| 10 – 25 km | 🟡 Amarillo | Verificar costos de transporte en estructura del proyecto |
-| > 25 km   | 🔴 Rojo     | Riesgo logístico alto; verificar acceso a mercados y precios en finca |
-""")
-        with c2:
-            st.markdown("""
-**C2 · Distancia a vía transitable más cercana**
-
-- Fuente: OpenStreetMap (OSM)
-- Métrica: distancia en línea recta al punto más cercano en vía clasificada
-- Búsqueda en radio de 5 km
-
-| Distancia | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| < 500 m    | 🟢 Verde    | Sin restricción |
-| 500 m – 2 km | 🟡 Amarillo | Verificar condición de la vía en temporada de lluvias |
-| > 2 km     | 🔴 Rojo     | Riesgo de inaccesibilidad; costos del primer tramo pueden inviabilizar el negocio |
-
-**Semáforo global C** = peor resultado entre C1 y C2.
-""")
-
-    # ─── D · RIESGO AGROCLIMÁTICO ─────────────────────────────────────────────
-    with st.expander("🌧️ D · Riesgo Agroclimático", expanded=True):
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"""
-**Fuente de datos**
-ERA5 reanalysis vía Open-Meteo · **10 años** de historia diaria.
-Variables: precipitación, temperatura máx/mín/media, humedad relativa, velocidad del viento.
-
-**Indicadores por cultivo**
-Los indicadores de riesgo son **específicos al cultivo** seleccionado como input.
-Cada cultivo tiene su propia selección de indicadores, meses de cálculo y curvas de vulnerabilidad,
-calibradas según su fenología y sus umbrales agronómicos de tolerancia.
-El cultivo activo actualmente es: **{_cult_m.capitalize()}**.
-
-**Metodología**
-1. Se calculan indicadores de riesgo anualmente para cada año del período.
-2. Para la evaluación crediticia se usa el **percentil 80 (P80)** de cada indicador —
-   el escenario adverso que ocurre **1 de cada 5 años**.
-3. El score por indicador se interpola linealmente entre los umbrales de la
-   **curva de vulnerabilidad** (0 = sin riesgo, 1 = extremo).
-4. El score global por categoría toma el **peor indicador** de esa categoría.
-5. El score global D es la **media de los peores por categoría**.
-
-**Hipótesis**
-Usar el P80 captura el riesgo latente de años adversos que históricamente
-han causado pérdidas de cultivo, sin sobredimensionar los años normales.
-""")
-        with c2:
-            st.markdown("""
-**Tabla de decisión global D**
-
-| Score P80 | Nivel | Acción recomendada |
-|-----------|-------|--------------------|
-| 0.00 – 0.10 | 🟢 Sin riesgo | Sin restricción |
-| 0.10 – 0.25 | 🟢 Bajo | Seguimiento anual estándar |
-| 0.25 – 0.50 | 🟡 Medio | Cláusula de seguimiento trimestral |
-| 0.50 – 0.75 | 🔴 Alto | Seguro agrícola obligatorio |
-| 0.75 – 1.00 | 🚨 Extremo | Evaluar viabilidad del proyecto |
-
-**Actualización de curvas**
-Las curvas de vulnerabilidad están almacenadas en el fichero Excel:
-`datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx`
-
-Para modificar umbrales o añadir cultivos: editar el Excel y actualizar el backend
-(redeploy de la aplicación). Los cambios se aplican automáticamente en el
-siguiente cálculo de riesgo para ese cultivo.
-""")
-
-        st.markdown("---")
-        st.markdown("#### 📊 Indicadores por cultivo — curvas de vulnerabilidad")
-        st.caption(
-            "Tabla completa de indicadores de la matriz de vulnerabilidad. "
-            "Filtra por cultivo para ver los indicadores activos y sus umbrales."
-        )
-
-        try:
-            from pathlib import Path as _Path
-            _mx_path = _Path(__file__).parent / "datos" / "indicadores" / "matriz_vulnerabilidad_consolidada.xlsx"
-            _df_mx = pd.read_excel(_mx_path)
-            _df_mx = _df_mx[_df_mx["Cultivo_app"].str.contains("sin equivalente") == False].copy()
-
-            _mx_cols = [
-                "Cultivo_app", "Categoría_riesgo", "Nombre_indicador",
-                "Definición", "Meses_cálculo", "Unidad",
-                "Sin_riesgo_0", "Riesgo_bajo_0.25", "Riesgo_medio_0.5",
-                "Riesgo_alto_0.75", "Riesgo_extremo_1", "Forma_curva",
-            ]
-            _df_show = _df_mx[_mx_cols].rename(columns={
-                "Cultivo_app":       "Cultivo",
-                "Categoría_riesgo":  "Categoría",
-                "Nombre_indicador":  "Indicador",
-                "Definición":        "Definición",
-                "Meses_cálculo":     "Meses",
-                "Unidad":            "Unidad",
-                "Sin_riesgo_0":      "Sin riesgo",
-                "Riesgo_bajo_0.25":  "Bajo (0.25)",
-                "Riesgo_medio_0.5":  "Medio (0.50)",
-                "Riesgo_alto_0.75":  "Alto (0.75)",
-                "Riesgo_extremo_1":  "Extremo (1.0)",
-                "Forma_curva":       "Curva",
-            })
-
-            for _col in ["Sin riesgo", "Bajo (0.25)", "Medio (0.50)", "Alto (0.75)", "Extremo (1.0)"]:
-                if _col in _df_show.columns:
-                    _df_show[_col] = _df_show[_col].astype(str)
-            _cultivos_mx = sorted(_df_show["Cultivo"].unique().tolist())
-            _default_cult = (
-                _cult_m.capitalize()
-                if _cult_m.capitalize() in _cultivos_mx
-                else _cultivos_mx[0]
-            )
-            _sel_cult = st.selectbox(
-                "Filtrar por cultivo",
-                options=["Todos"] + _cultivos_mx,
-                index=_cultivos_mx.index(_default_cult) + 1
-                if _default_cult in _cultivos_mx else 0,
-                key="met_cult_filter",
-            )
-            _df_filt = (
-                _df_show if _sel_cult == "Todos"
-                else _df_show[_df_show["Cultivo"] == _sel_cult]
-            )
-            st.dataframe(
-                _df_filt.reset_index(drop=True),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Definición":  st.column_config.TextColumn(width="large"),
-                    "Indicador":   st.column_config.TextColumn(width="medium"),
-                    "Meses":       st.column_config.TextColumn(width="small"),
-                    "Curva":       st.column_config.TextColumn(width="medium"),
-                },
-            )
-            st.caption(
-                f"📁 Fuente: `datos/indicadores/matriz_vulnerabilidad_consolidada.xlsx` · "
-                f"{len(_df_filt)} indicadores mostrados · "
-                "Para modificar umbrales o añadir cultivos, editar el Excel y actualizar el backend."
-            )
-        except Exception as _e_mx:
-            st.warning(f"No se pudo cargar la matriz de vulnerabilidad: {_e_mx}")
