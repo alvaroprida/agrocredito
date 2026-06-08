@@ -993,104 +993,67 @@ with tab_monitoreo:
                             unsafe_allow_html=True,
                         )
 
-                # Gráfico serie temporal con banda ±1σ histórica (5 años)
-                _sc_list   = _sel_ndv.get("scenes", [])
-                _hist_m5   = _sel_ndv.get("hist_monthly", {})
-                if _sc_list:
-                    _df_sc = pd.DataFrame(_sc_list)
-                    _df_sc["date"] = pd.to_datetime(_df_sc["date"])
+                # Gráfico NDVI
+                _scenes_plot = _sel_ndv.get("scenes", [])
+                _hist_plot   = _sel_ndv.get("hist_monthly", {})
 
-                    # Serie diaria para construir la banda continua
-                    _band_dates = pd.date_range(
-                        _df_sc["date"].min() - pd.Timedelta(days=15),
-                        _df_sc["date"].max() + pd.Timedelta(days=15),
-                        freq="D",
-                    )
-                    _b_upper, _b_lower, _b_mean = [], [], []
-                    for _bd in _band_dates:
-                        _he = _hist_m5.get(_bd.month, {})
-                        _bm = _he.get("mean") if isinstance(_he, dict) else None
-                        _bs = _he.get("std",  0) if isinstance(_he, dict) else 0
-                        if _bm is not None:
-                            _b_upper.append(_bm + (_bs or 0))
-                            _b_lower.append(_bm - (_bs or 0))
-                            _b_mean.append(_bm)
-                        else:
-                            _b_upper.append(None)
-                            _b_lower.append(None)
-                            _b_mean.append(None)
+                if not _scenes_plot:
+                    st.info("Sin datos de escenas para el gráfico. Vuelve a calcular el portafolio.")
+                else:
+                    _df_plot = pd.DataFrame(_scenes_plot)
+                    _df_plot["date"] = pd.to_datetime(_df_plot["date"])
 
-                    _fig_sc = go.Figure()
+                    _fig = go.Figure()
 
-                    # ── Banda ±1σ: un add_shape por mes (más robusto que fill) ──
-                    # Traza dummy para la leyenda de la banda
-                    _fig_sc.add_trace(go.Scatter(
-                        x=[None], y=[None], mode="markers",
-                        marker=dict(size=12, color="rgba(22,163,74,0.25)",
-                                    symbol="square"),
-                        name="±1σ histórico (5a)", showlegend=True,
-                        hoverinfo="skip",
-                    ))
-                    # Traza dummy para la leyenda de la media
-                    _fig_sc.add_trace(go.Scatter(
-                        x=[None], y=[None], mode="lines",
-                        line=dict(color="rgba(22,163,74,0.6)", dash="dash", width=1.5),
-                        name="Media histórica mensual (5a)", showlegend=True,
-                        hoverinfo="skip",
-                    ))
-
-                    # Una shape rect + una shape line por cada mes del rango
-                    _band_months = pd.date_range(
-                        _df_sc["date"].min().to_period("M").to_timestamp(),
-                        _df_sc["date"].max().to_period("M").to_timestamp() + pd.offsets.MonthEnd(1),
+                    # Banda ±1σ y media: una shape por mes natural del rango
+                    for _ms in pd.date_range(
+                        _df_plot["date"].min().to_period("M").to_timestamp(),
+                        _df_plot["date"].max().to_period("M").to_timestamp(),
                         freq="MS",
-                    )
-                    for _bmd in _band_months:
-                        _he = _hist_m5.get(_bmd.month, {})
+                    ):
+                        _he = _hist_plot.get(_ms.month)
                         if not isinstance(_he, dict) or _he.get("mean") is None:
                             continue
-                        _mn = _he["mean"]
-                        _sd = _he.get("std", 0) or 0
-                        _m_end = _bmd + pd.offsets.MonthEnd(1)
-                        # Rectángulo ±1σ
-                        _fig_sc.add_shape(
-                            type="rect",
-                            x0=_bmd, x1=_m_end,
+                        _mn = float(_he["mean"])
+                        _sd = float(_he.get("std") or 0)
+                        _me = _ms + pd.offsets.MonthEnd(1)
+                        _fig.add_shape(
+                            type="rect", layer="below",
+                            x0=str(_ms.date()), x1=str(_me.date()),
                             y0=_mn - _sd, y1=_mn + _sd,
-                            fillcolor="rgba(22,163,74,0.15)",
-                            line_width=0,
-                            layer="below",
+                            fillcolor="rgba(22,163,74,0.18)", line_width=0,
                         )
-                        # Línea de media
-                        _fig_sc.add_shape(
-                            type="line",
-                            x0=_bmd, x1=_m_end,
+                        _fig.add_shape(
+                            type="line", layer="below",
+                            x0=str(_ms.date()), x1=str(_me.date()),
                             y0=_mn, y1=_mn,
-                            line=dict(color="rgba(22,163,74,0.6)",
-                                      dash="dash", width=1.5),
-                            layer="below",
+                            line=dict(color="rgba(22,163,74,0.7)", dash="dash", width=1.5),
                         )
 
-                    # Escenas individuales último año (encima de la banda)
-                    _fig_sc.add_trace(go.Scatter(
-                        x=_df_sc["date"], y=_df_sc["median"],
+                    # Puntos y línea: escenas del último año
+                    _fig.add_trace(go.Scatter(
+                        x=_df_plot["date"],
+                        y=_df_plot["median"],
                         mode="markers+lines",
                         marker=dict(size=8, color="#15803d"),
                         line=dict(color="#15803d", width=1.5),
-                        name="NDVI escena (último año)",
-                        hovertemplate="%{x|%d %b %Y}<br>NDVI: %{y:.4f}<extra></extra>",
+                        name="NDVI escenas (último año)",
+                        hovertemplate="%{x|%d %b %Y} — NDVI: %{y:.4f}<extra></extra>",
                     ))
-                    _fig_sc.update_layout(
-                        title=(f"NDVI Sentinel-2 · último año "
-                               f"({_sel_ndv.get('n_scenes',0)} escenas, nubes <40%) "
-                               f"· banda ±1σ histórico 5 años"),
-                        xaxis_title="", yaxis_title="NDVI",
-                        height=340,
-                        margin=dict(t=45, b=20),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                    xanchor="right", x=1),
+
+                    _fig.update_layout(
+                        height=300,
+                        margin=dict(t=30, b=20, l=10, r=10),
+                        xaxis_title="",
+                        yaxis_title="NDVI",
+                        showlegend=False,
                     )
-                    st.plotly_chart(_fig_sc, use_container_width=True)
+                    st.plotly_chart(_fig, use_container_width=True)
+                    st.caption(
+                        f"Puntos: {len(_scenes_plot)} escenas Sentinel-2 último año (nubes <40%)  ·  "
+                        f"Banda sombreada: ±1σ histórico 5 años por mes  ·  "
+                        f"Línea discontinua: media histórica mensual"
+                    )
 
         # Bloque B · Indicadores climáticos ──────────────────────────────────
         with st.expander("🌦️ Bloque B · Indicadores Climáticos (B1–E1)", expanded=True):
