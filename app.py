@@ -133,7 +133,7 @@ def _get_monitoring_ndvi_cached(geojson_str: str):
             _ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
             .filterBounds(_roi)
             .filterDate(d_start, d_end)
-            .filter(_ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+            .filter(_ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
             .map(_mask_s2_clouds)
             .map(lambda img: img.normalizedDifference(["B8", "B4"])
                                 .rename("NDVI")
@@ -931,7 +931,7 @@ with tab_monitoreo:
             if "error" in _sel_ndv:
                 st.error(f"Error GEE: {_sel_ndv['error']}")
             elif not _sel_ndv.get("last_date"):
-                st.warning("Sin escenas válidas (nubes <20%) en el último año.")
+                st.warning("Sin escenas válidas (nubes <40%) en el último año.")
             else:
                 _ld   = _sel_ndv["last_date"]
                 _lv   = _sel_ndv["last_ndvi"]
@@ -978,7 +978,7 @@ with tab_monitoreo:
                         _df_sc, x="date", y="median",
                         labels={"date": "", "median": "NDVI medio"},
                         color_discrete_sequence=["#16a34a"],
-                        title=f"Serie NDVI · Sentinel-2 (último año, nubes <20%) · {_sel_ndv.get('n_scenes',0)} escenas",
+                        title=f"Serie NDVI · Sentinel-2 (último año, nubes <40%) · {_sel_ndv.get('n_scenes',0)} escenas",
                     )
                     _hist_m_det = _sel_ndv.get("hist_monthly", {}).get(
                         pd.to_datetime(_ld).month
@@ -993,44 +993,44 @@ with tab_monitoreo:
                     _fig_sc.update_layout(height=240, margin=dict(t=35, b=10))
                     st.plotly_chart(_fig_sc, use_container_width=True)
 
-        # Bloques B–E · Indicadores climáticos ───────────────────────────────
-        st.markdown("---")
-        if "error" in _sel_clim:
-            st.error(f"Error indicadores climáticos: {_sel_clim['error']}")
-        else:
-            _hoy_g = _sel_clim.get("Hoy",     {}).get("global", "verde")
-            _p7_g  = _sel_clim.get("+7 días", {}).get("global", "verde")
-            _p14_g = _sel_clim.get("+14 días",{}).get("global", "verde")
+        # Bloque B · Indicadores climáticos ──────────────────────────────────
+        with st.expander("🌦️ Bloque B · Indicadores Climáticos (B1–E1)", expanded=True):
+            if "error" in _sel_clim:
+                st.error(f"Error indicadores climáticos: {_sel_clim['error']}")
+            else:
+                _hoy_g = _sel_clim.get("Hoy",     {}).get("global", "verde")
+                _p7_g  = _sel_clim.get("+7 días", {}).get("global", "verde")
+                _p14_g = _sel_clim.get("+14 días",{}).get("global", "verde")
 
-            _bc1, _bc2, _bc3 = st.columns(3)
-            for _bcol, _hl, _hg in [(_bc1,"Hoy",_hoy_g),(_bc2,"+7 días",_p7_g),(_bc3,"+14 días",_p14_g)]:
-                with _bcol:
-                    st.markdown(
-                        f'<div style="background:{SEM_BG[_hg]};border:2px solid {SEM_BD[_hg]};'
-                        f'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
-                        f'<b style="color:{SEM_TEXT[_hg]}">{SEM_ICON[_hg]} {_hl}</b></div>',
-                        unsafe_allow_html=True,
-                    )
-
-            _ic1, _ic2, _ic3 = st.columns(3)
-            for _icol, _hl in [(_ic1,"Hoy"),(_ic2,"+7 días"),(_ic3,"+14 días")]:
-                _h_res = _sel_clim.get(_hl, {})
-                with _icol:
-                    for _iid, _ind in _h_res.items():
-                        if _iid == "global" or _ind is None:
-                            continue
-                        _s = _ind.get("semaforo", "verde")
+                _bc1, _bc2, _bc3 = st.columns(3)
+                for _bcol, _hl, _hg in [(_bc1,"Hoy",_hoy_g),(_bc2,"+7 días",_p7_g),(_bc3,"+14 días",_p14_g)]:
+                    with _bcol:
                         st.markdown(
-                            f'<div style="background:{SEM_BG[_s]};border-left:4px solid {SEM_BD[_s]};'
-                            f'border-radius:6px;padding:7px 10px;margin-bottom:6px">'
-                            f'<div style="font-size:0.72rem;font-weight:600;color:{SEM_TEXT[_s]}">'
-                            f'{SEM_ICON[_s]} {_ind.get("label","")}</div>'
-                            f'<div style="font-size:1rem;font-weight:700;margin:2px 0 2px 0">'
-                            f'{_ind.get("display","")}</div>'
-                            f'<div style="font-size:0.68rem;color:#6b7280">'
-                            f'→ {_ind.get("action","")}</div></div>',
+                            f'<div style="background:{SEM_BG[_hg]};border:2px solid {SEM_BD[_hg]};'
+                            f'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
+                            f'<b style="color:{SEM_TEXT[_hg]}">{SEM_ICON[_hg]} {_hl}</b></div>',
                             unsafe_allow_html=True,
                         )
+
+                _ic1, _ic2, _ic3 = st.columns(3)
+                for _icol, _hl in [(_ic1,"Hoy"),(_ic2,"+7 días"),(_ic3,"+14 días")]:
+                    _h_res = _sel_clim.get(_hl, {})
+                    with _icol:
+                        for _iid, _ind in _h_res.items():
+                            if _iid == "global" or _ind is None:
+                                continue
+                            _s = _ind.get("semaforo", "verde")
+                            st.markdown(
+                                f'<div style="background:{SEM_BG[_s]};border-left:4px solid {SEM_BD[_s]};'
+                                f'border-radius:6px;padding:7px 10px;margin-bottom:6px">'
+                                f'<div style="font-size:0.72rem;font-weight:600;color:{SEM_TEXT[_s]}">'
+                                f'{SEM_ICON[_s]} {_ind.get("label","")}</div>'
+                                f'<div style="font-size:1rem;font-weight:700;margin:2px 0 2px 0">'
+                                f'{_ind.get("display","")}</div>'
+                                f'<div style="font-size:0.68rem;color:#6b7280">'
+                                f'→ {_ind.get("action","")}</div></div>',
+                                unsafe_allow_html=True,
+                            )
     else:
         st.markdown("---")
         st.info("Pulsa **Calcular indicadores** para analizar el portafolio.", icon="👆")
