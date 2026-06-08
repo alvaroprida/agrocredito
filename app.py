@@ -111,9 +111,10 @@ def _get_monitoring_cached(lat: float, lon: float):
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_monitoring_ndvi_cached(geojson_str: str):
     """
-    GEE: escenas individuales Sentinel-2 del último año + medias históricas mensuales
-    de los últimos 3 años (para calcular A1 anomalía).
-    Retorna {"scenes": [{date, median}], "hist_monthly": {1..12: float}}.
+    GEE: escenas individuales Sentinel-2 del último año + estadísticas históricas
+    mensuales (media y desv. estándar) de los últimos 5 años para banda ±1σ.
+    Retorna {"scenes": [{date, median}],
+             "hist_monthly": {1..12: {"mean": float, "std": float}}}.
     Completamente serializable por st.cache_data (sin mapas ni arrays).
     """
     import ee as _ee
@@ -124,9 +125,9 @@ def _get_monitoring_ndvi_cached(geojson_str: str):
 
     _roi = _ee.Geometry(json.loads(geojson_str))
     _now = _dt.utcnow()
-    _d1  = _now.strftime("%Y-%m-%d")
+    _d1    = _now.strftime("%Y-%m-%d")
     _d_1yr = (_now - _td(days=365)).strftime("%Y-%m-%d")
-    _d_3yr = (_now - _td(days=365 * 3)).strftime("%Y-%m-%d")
+    _d_5yr = (_now - _td(days=365 * 5)).strftime("%Y-%m-%d")
 
     def _s2_col(d_start, d_end):
         return (
@@ -141,7 +142,7 @@ def _get_monitoring_ndvi_cached(geojson_str: str):
         )
 
     _s2_1yr = _s2_col(_d_1yr, _d1)
-    _s2_3yr = _s2_col(_d_3yr, _d1)
+    _s2_5yr = _s2_col(_d_5yr, _d1)
 
     # ── 1. Escenas individuales — último 1 año ────────────────────────────────
     def _scene_feat(img):
@@ -156,22 +157,31 @@ def _get_monitoring_ndvi_cached(geojson_str: str):
         key=lambda x: x["date"],
     )
 
-    # ── 2. Medias históricas mensuales — últimos 3 años ───────────────────────
+    # ── 2. Estadísticas históricas por mes de calendario — últimos 5 años ─────
+    # Calcula media y desv. estándar de las medias por escena dentro del polígono.
     def _month_hist(m):
         m   = _ee.Number(m)
-        mon = _s2_3yr.filter(_ee.Filter.calendarRange(m, m, "month"))
-        val = _ee.Algorithms.If(
-            mon.size().gt(0),
-            mon.mean().reduceRegion(_ee.Reducer.mean(), _roi, 10, maxPixels=1e8).get("NDVI"),
-            None,
-        )
-        return _ee.Feature(None, {"month": m, "mean_ndvi": val})
+        mon = _s2_5yr.filter(_ee.Filter.calendarRange(m, m, "month"))
+
+        def _scene_mean(img):
+            v = img.reduceRegion(_ee.Reducer.mean(), _roi, 10, maxPixels=1e8).get("NDVI")
+            return _ee.Feature(None, {"ndvi": v})
+
+        _arr = mon.map(_scene_mean).aggregate_array("ndvi").removeAll([None])
+        _mean = _ee.Algorithms.If(_arr.size().gt(0), _arr.reduce(_ee.Reducer.mean()),   None)
+        _std  = _ee.Algorithms.If(_arr.size().gt(1), _arr.reduce(_ee.Reducer.sampleStdDev()), 0)
+        return _ee.Feature(None, {"month": m, "mean_ndvi": _mean, "std_ndvi": _std})
 
     _hist_raw = _ee.FeatureCollection(_ee.List.sequence(1, 12).map(_month_hist)).getInfo()["features"]
-    _hist_monthly = {
-        int(f["properties"]["month"]): round(float(f["properties"]["mean_ndvi"]), 4)
-        for f in _hist_raw if f["properties"].get("mean_ndvi") is not None
-    }
+    _hist_monthly: dict = {}
+    for _f in _hist_raw:
+        _pr = _f["properties"]
+        _m, _mn, _sd = _pr.get("month"), _pr.get("mean_ndvi"), _pr.get("std_ndvi", 0)
+        if _m is not None and _mn is not None:
+            _hist_monthly[int(_m)] = {
+                "mean": round(float(_mn), 4),
+                "std":  round(float(_sd or 0), 4),
+            }
 
     return {"scenes": _scenes, "hist_monthly": _hist_monthly}
 
@@ -190,7 +200,8 @@ def _ndvi_indicators(ndvi_result: dict) -> dict:
     prev = scenes[-2] if n >= 2 else None
     last_ndvi  = last["median"]
     last_month = int(last["date"][5:7])
-    hist_m     = hist.get(last_month)
+    _hentry    = hist.get(last_month, {})
+    hist_m     = _hentry.get("mean") if isinstance(_hentry, dict) else _hentry
 
     a1_pct = ((last_ndvi - hist_m) / hist_m * 100) if (hist_m and hist_m > 0) else None
     a1_sem = ("verde" if a1_pct is None or a1_pct > -10
@@ -969,28 +980,76 @@ with tab_monitoreo:
                             unsafe_allow_html=True,
                         )
 
-                # Gráfico serie temporal
-                _sc_list = _sel_ndv.get("scenes", [])
+                # Gráfico serie temporal con banda ±1σ histórica (5 años)
+                _sc_list   = _sel_ndv.get("scenes", [])
+                _hist_m5   = _sel_ndv.get("hist_monthly", {})
                 if _sc_list:
                     _df_sc = pd.DataFrame(_sc_list)
                     _df_sc["date"] = pd.to_datetime(_df_sc["date"])
-                    _fig_sc = px.scatter(
-                        _df_sc, x="date", y="median",
-                        labels={"date": "", "median": "NDVI medio"},
-                        color_discrete_sequence=["#16a34a"],
-                        title=f"Serie NDVI · Sentinel-2 (último año, nubes <40%) · {_sel_ndv.get('n_scenes',0)} escenas",
+
+                    # Serie diaria para construir la banda continua
+                    _band_dates = pd.date_range(
+                        _df_sc["date"].min() - pd.Timedelta(days=15),
+                        _df_sc["date"].max() + pd.Timedelta(days=15),
+                        freq="D",
                     )
-                    _hist_m_det = _sel_ndv.get("hist_monthly", {}).get(
-                        pd.to_datetime(_ld).month
+                    _b_upper, _b_lower, _b_mean = [], [], []
+                    for _bd in _band_dates:
+                        _he = _hist_m5.get(_bd.month, {})
+                        _bm = _he.get("mean") if isinstance(_he, dict) else None
+                        _bs = _he.get("std",  0) if isinstance(_he, dict) else 0
+                        if _bm is not None:
+                            _b_upper.append(_bm + (_bs or 0))
+                            _b_lower.append(_bm - (_bs or 0))
+                            _b_mean.append(_bm)
+                        else:
+                            _b_upper.append(None)
+                            _b_lower.append(None)
+                            _b_mean.append(None)
+
+                    _fig_sc = go.Figure()
+
+                    # Banda sombreada ±1σ
+                    _bx = list(_band_dates) + list(_band_dates)[::-1]
+                    _by = _b_upper + _b_lower[::-1]
+                    _fig_sc.add_trace(go.Scatter(
+                        x=_bx, y=_by,
+                        fill="toself",
+                        fillcolor="rgba(22,163,74,0.12)",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        name="±1σ histórico (5a)",
+                        hoverinfo="skip",
+                        showlegend=True,
+                    ))
+
+                    # Línea de media histórica mensual
+                    _fig_sc.add_trace(go.Scatter(
+                        x=_band_dates, y=_b_mean,
+                        line=dict(color="rgba(22,163,74,0.45)", dash="dash", width=1.5),
+                        name="Media histórica mensual (5a)",
+                        hoverinfo="skip",
+                        showlegend=True,
+                    ))
+
+                    # Puntos de escenas individuales (último año)
+                    _fig_sc.add_trace(go.Scatter(
+                        x=_df_sc["date"], y=_df_sc["median"],
+                        mode="markers+lines",
+                        marker=dict(size=8, color="#15803d", symbol="circle"),
+                        line=dict(color="#15803d", width=1.5),
+                        name="NDVI escena (último año)",
+                        hovertemplate="%{x|%d %b %Y}<br>NDVI: %{y:.4f}<extra></extra>",
+                    ))
+
+                    _fig_sc.update_layout(
+                        title=f"NDVI Sentinel-2 · último año ({_sel_ndv.get('n_scenes',0)} escenas, nubes <40%) · banda ±1σ sobre 5 años",
+                        xaxis_title="",
+                        yaxis_title="NDVI",
+                        height=300,
+                        margin=dict(t=45, b=20),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                    xanchor="right", x=1),
                     )
-                    if _hist_m_det:
-                        _fig_sc.add_hline(
-                            y=_hist_m_det, line_dash="dash", line_color="#94a3b8",
-                            annotation_text=f"Normal 3a mes {pd.to_datetime(_ld).month} ({_hist_m_det:.3f})",
-                            annotation_position="bottom right",
-                        )
-                    _fig_sc.update_traces(marker=dict(size=8))
-                    _fig_sc.update_layout(height=240, margin=dict(t=35, b=10))
                     st.plotly_chart(_fig_sc, use_container_width=True)
 
         # Bloque B · Indicadores climáticos ──────────────────────────────────
