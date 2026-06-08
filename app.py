@@ -109,9 +109,36 @@ def _get_monitoring_cached(lat: float, lon: float):
     return get_monitoring_series(lat, lon, n_hist_years=5)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_monitoring_ndvi_cached(geojson_str: str, date_start: str, date_end: str, api_key: str):
-    from utils.eosda_ndvi import _do_fetch
-    return _do_fetch(geojson_str, date_start, date_end, api_key)
+def _get_monitoring_ndvi_cached(geojson_str: str, n_years: int, api_key: str):
+    """
+    Descarga serie NDVI via EOSDA Field Analytics API (misma que usa B2 en Tab 1).
+    Recibe el polígono como GeoJSON string (hashable para cache).
+    """
+    import numpy as _np
+    from utils.eosda_ndvi import (
+        _fa_create_field, _fa_delete_field,
+        _fa_fetch_year, _fa_year_ranges,
+    )
+    from shapely.geometry import shape as _shape
+    _geom = _shape(json.loads(geojson_str))
+    _gdf  = gpd.GeoDataFrame(geometry=[_geom], crs="EPSG:4326")
+
+    _field_id = _fa_create_field(_gdf, api_key)
+    try:
+        _records: list = []
+        for _s, _e in _fa_year_ranges(n_years):
+            try:
+                _records.extend(_fa_fetch_year(_field_id, _s, _e, api_key, max_cloud=20))
+            except Exception:
+                pass
+    finally:
+        _fa_delete_field(_field_id, api_key)
+
+    return sorted(
+        [r for r in _records
+         if isinstance(r.get("median"), (int, float)) and not _np.isnan(r["median"])],
+        key=lambda x: x["date"],
+    )
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_predio_monitoring_cached(lat: float, lon: float):
@@ -2370,12 +2397,10 @@ with tab_monitoreo:
                     _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
 
                     if _btn_ndvi:
-                        _d_end   = date.today().strftime("%Y-%m-%d")
-                        _d_start = (date.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-                        with st.spinner("Consultando Sentinel-2 vía EOSDA (puede tardar ~30 s)…"):
+                        with st.spinner("Consultando Sentinel-2 vía EOSDA Field Analytics (puede tardar ~30 s)…"):
                             try:
                                 _scenes = _get_monitoring_ndvi_cached(
-                                    _gjson, _d_start, _d_end, _eosda_key
+                                    _gjson, 3, _eosda_key
                                 )
                                 st.session_state[_ndvi_cache_key] = _scenes
                             except Exception as _e:
