@@ -67,7 +67,7 @@ from utils.report_generator import generate_exante_report
 from utils.monitoring_climate     import get_monitoring_series
 from utils.monitoring_indicators  import (
     compute_all_indicators, HORIZONS,
-    SEM_ICON, SEM_BG, SEM_BD, SEM_TEXT,
+    SEM_ICON, SEM_BG, SEM_BD, SEM_TEXT, SEM_ORDER,
 )
 import io
 import json
@@ -111,20 +111,23 @@ def _get_monitoring_cached(lat: float, lon: float):
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_monitoring_ndvi_cached(geojson_str: str):
     """
-    GEE: escenas individuales Sentinel-2 del último año + estadísticas históricas
-    mensuales (media y desv. estándar) de los últimos 5 años para banda ±1σ.
+    GEE: escenas individuales (último 1 año) para el gráfico + todas las escenas
+    de los últimos 5 años descargadas en una sola llamada para calcular en Python
+    la media y desv. estándar mensual por mes de calendario.
     Retorna {"scenes": [{date, median}],
              "hist_monthly": {1..12: {"mean": float, "std": float}}}.
     Completamente serializable por st.cache_data (sin mapas ni arrays).
     """
     import ee as _ee
+    import numpy as _np
     from datetime import datetime as _dt, timedelta as _td
+    from collections import defaultdict as _dd
     from utils.gee_ndvi import _init_gee, _mask_s2_clouds
 
     _init_gee()
 
-    _roi = _ee.Geometry(json.loads(geojson_str))
-    _now = _dt.utcnow()
+    _roi   = _ee.Geometry(json.loads(geojson_str))
+    _now   = _dt.utcnow()
     _d1    = _now.strftime("%Y-%m-%d")
     _d_1yr = (_now - _td(days=365)).strftime("%Y-%m-%d")
     _d_5yr = (_now - _td(days=365 * 5)).strftime("%Y-%m-%d")
@@ -141,46 +144,39 @@ def _get_monitoring_ndvi_cached(geojson_str: str):
                                 .copyProperties(img, ["system:time_start"]))
         )
 
-    _s2_1yr = _s2_col(_d_1yr, _d1)
-    _s2_5yr = _s2_col(_d_5yr, _d1)
-
-    # ── 1. Escenas individuales — último 1 año ────────────────────────────────
     def _scene_feat(img):
         val = img.reduceRegion(_ee.Reducer.mean(), _roi, 10, maxPixels=1e8).get("NDVI")
-        return _ee.Feature(None, {"date": img.date().format("YYYY-MM-dd"), "ndvi": val})
+        return _ee.Feature(None, {
+            "date":  img.date().format("YYYY-MM-dd"),
+            "month": img.date().get("month"),
+            "ndvi":  val,
+        })
 
-    _scenes_raw = _s2_1yr.map(_scene_feat).getInfo()["features"]
-    _scenes = sorted(
+    # ── 1. Escenas individuales — último 1 año (puntos del gráfico) ──────────
+    _raw_1yr = _s2_col(_d_1yr, _d1).map(_scene_feat).getInfo()["features"]
+    _scenes  = sorted(
         [{"date": f["properties"]["date"],
           "median": round(float(f["properties"]["ndvi"]), 4)}
-         for f in _scenes_raw if f["properties"].get("ndvi") is not None],
+         for f in _raw_1yr if f["properties"].get("ndvi") is not None],
         key=lambda x: x["date"],
     )
 
-    # ── 2. Estadísticas históricas por mes de calendario — últimos 5 años ─────
-    # Calcula media y desv. estándar de las medias por escena dentro del polígono.
-    def _month_hist(m):
-        m   = _ee.Number(m)
-        mon = _s2_5yr.filter(_ee.Filter.calendarRange(m, m, "month"))
-
-        def _scene_mean(img):
-            v = img.reduceRegion(_ee.Reducer.mean(), _roi, 10, maxPixels=1e8).get("NDVI")
-            return _ee.Feature(None, {"ndvi": v})
-
-        _arr = mon.map(_scene_mean).aggregate_array("ndvi").removeAll([None])
-        _mean = _ee.Algorithms.If(_arr.size().gt(0), _arr.reduce(_ee.Reducer.mean()),   None)
-        _std  = _ee.Algorithms.If(_arr.size().gt(1), _arr.reduce(_ee.Reducer.sampleStdDev()), 0)
-        return _ee.Feature(None, {"month": m, "mean_ndvi": _mean, "std_ndvi": _std})
-
-    _hist_raw = _ee.FeatureCollection(_ee.List.sequence(1, 12).map(_month_hist)).getInfo()["features"]
-    _hist_monthly: dict = {}
-    for _f in _hist_raw:
+    # ── 2. Escenas 5 años → stats mensuales en Python (evita complejidad GEE) ─
+    # ee.List.reduce() devuelve un dict, no un escalar → cálculo en Python.
+    _raw_5yr = _s2_col(_d_5yr, _d1).map(_scene_feat).getInfo()["features"]
+    _monthly_vals: dict = _dd(list)
+    for _f in _raw_5yr:
         _pr = _f["properties"]
-        _m, _mn, _sd = _pr.get("month"), _pr.get("mean_ndvi"), _pr.get("std_ndvi", 0)
-        if _m is not None and _mn is not None:
-            _hist_monthly[int(_m)] = {
-                "mean": round(float(_mn), 4),
-                "std":  round(float(_sd or 0), 4),
+        _m, _v = _pr.get("month"), _pr.get("ndvi")
+        if _m is not None and _v is not None:
+            _monthly_vals[int(_m)].append(float(_v))
+
+    _hist_monthly: dict = {}
+    for _m, _vals in _monthly_vals.items():
+        if _vals:
+            _hist_monthly[_m] = {
+                "mean": round(float(_np.mean(_vals)), 4),
+                "std":  round(float(_np.std(_vals, ddof=1)) if len(_vals) > 1 else 0.0, 4),
             }
 
     return {"scenes": _scenes, "hist_monthly": _hist_monthly}
@@ -863,12 +859,40 @@ with tab_monitoreo:
         st.markdown("---")
         st.markdown("### 🗂️ Portafolio Activo · Resumen de Indicadores")
 
-        _A_ACT = {
-            "A1": {"verde": "Sin acción.", "amarillo": "Llamada al agricultor; registrar en expediente.",
-                   "rojo":  "Solicitar fotos + visita técnica; activar documentación seguro."},
-            "A2": {"verde": "Sin acción.", "amarillo": "Monitorear próxima imagen con prioridad.",
-                   "rojo":  "Si A1 también rojo: activar protocolo de alivio."},
-        }
+        def _veg_cell(ndv: dict) -> str:
+            """Indicador vegetación combinado A1+A2: toma el peor semáforo."""
+            if "error" in ndv:
+                return "❌ Error GEE"
+            _a1s = ndv.get("a1_sem") or "verde"
+            _a2s = ndv.get("a2_sem") or "verde"
+            _a1p = ndv.get("a1_pct")
+            _a2v = ndv.get("a2_val")
+            # Hipótesis combinación: cualquier señal de deterioro activa alerta
+            _sem = max([_a1s, _a2s], key=lambda s: SEM_ORDER.get(s, 0))
+            if not ndv.get("last_date"):
+                return "— Sin escenas"
+            if _sem == "verde":
+                return f"{SEM_ICON['verde']} Normal"
+            _parts = []
+            if _a1p is not None: _parts.append(f"A1: {_a1p:+.1f}%")
+            if _a2v is not None: _parts.append(f"A2: {_a2v:+.4f}")
+            return f"{SEM_ICON[_sem]} " + (" · ".join(_parts) if _parts else "—")
+
+        def _clima_cell(clim: dict, horizon: str) -> str:
+            """Semáforo clima + nombres de indicadores en alerta (si los hay)."""
+            if "error" in clim:
+                return "❌"
+            _h   = clim.get(horizon, {})
+            _g   = _h.get("global", "verde")
+            _ico = SEM_ICON.get(_g, "⚪")
+            if _g == "verde":
+                return _ico
+            _alerts = sorted(
+                _iid for _iid, _ind in _h.items()
+                if _iid != "global" and _ind is not None
+                and SEM_ORDER.get(_ind.get("semaforo", "verde"), 0) > 0
+            )
+            return f"{_ico} {', '.join(_alerts)}" if _alerts else _ico
 
         _rows = []
         for _p in _portfolio:
@@ -876,41 +900,13 @@ with tab_monitoreo:
             _rec  = _results_map.get(_nm, {})
             _clim = _rec.get("clima", {})
             _ndv  = _rec.get("ndvi",  {})
-
-            # Semáforos climáticos
-            _s_hoy = SEM_ICON.get(_clim.get("Hoy",     {}).get("global","verde"),"⚪") if "error" not in _clim else "❌"
-            _s_p7  = SEM_ICON.get(_clim.get("+7 días", {}).get("global","verde"),"⚪") if "error" not in _clim else "❌"
-            _s_p14 = SEM_ICON.get(_clim.get("+14 días",{}).get("global","verde"),"⚪") if "error" not in _clim else "❌"
-
-            # NDVI
-            _n_img   = _ndv.get("n_scenes",  "—") if "error" not in _ndv else "❌"
-            _ld      = _ndv.get("last_date")
-            _lv      = _ndv.get("last_ndvi")
-            _pd_     = _ndv.get("prev_date")
-            _pv      = _ndv.get("prev_ndvi")
-            _a1p     = _ndv.get("a1_pct")
-            _a1s     = _ndv.get("a1_sem") or "verde"
-            _a2v     = _ndv.get("a2_val")
-            _a2s     = _ndv.get("a2_sem") or "verde"
-
-            _last_str = f"{_ld}  /  {_lv:.3f}" if (_ld and _lv is not None) else "—"
-            _prev_str = f"{_pd_}  /  {_pv:.3f}" if (_pd_ and _pv is not None) else "—"
-            _a1_str   = (f"{SEM_ICON[_a1s]} {_a1p:+.1f}%" if _a1p is not None
-                         else f"{SEM_ICON[_a1s]} —")
-            _a2_str   = (f"{SEM_ICON[_a2s]} {_a2v:+.4f}" if _a2v is not None
-                         else f"{SEM_ICON[_a2s]} —")
-
             _rows.append({
-                "Predio":             _nm,
-                "Cultivo":            _p["cultivo"],
-                "N img. (1 año)":     _n_img,
-                "Última escena / NDVI": _last_str,
-                "Penúltima escena / NDVI": _prev_str,
-                "A1 Anomalía":        _a1_str,
-                "A2 Tendencia":       _a2_str,
-                "Clima Hoy":          _s_hoy,
-                "Clima +7d":          _s_p7,
-                "Clima +14d":         _s_p14,
+                "Predio":        _nm,
+                "Cultivo":       _p["cultivo"],
+                "Vegetación NDVI": _veg_cell(_ndv),
+                "Clima Hoy":     _clima_cell(_clim, "Hoy"),
+                "Clima +7d":     _clima_cell(_clim, "+7 días"),
+                "Clima +14d":    _clima_cell(_clim, "+14 días"),
             })
 
         st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
@@ -938,6 +934,12 @@ with tab_monitoreo:
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
         # Bloque A · NDVI ─────────────────────────────────────────────────────
+        _A_ACT = {
+            "A1": {"verde": "Sin acción.", "amarillo": "Llamada al agricultor; registrar en expediente.",
+                   "rojo":  "Solicitar fotos + visita técnica; activar documentación seguro."},
+            "A2": {"verde": "Sin acción.", "amarillo": "Monitorear próxima imagen Sentinel-2 con prioridad.",
+                   "rojo":  "Si A1 también rojo: activar protocolo de alivio."},
+        }
         with st.expander("🛰️ Bloque A · Vegetación NDVI (Sentinel-2 · GEE)", expanded=True):
             if "error" in _sel_ndv:
                 st.error(f"Error GEE: {_sel_ndv['error']}")
@@ -1009,43 +1011,47 @@ with tab_monitoreo:
 
                     _fig_sc = go.Figure()
 
-                    # Banda sombreada ±1σ
-                    _bx = list(_band_dates) + list(_band_dates)[::-1]
-                    _by = _b_upper + _b_lower[::-1]
+                    # Cota superior (sin leyenda, base del fill tonexty)
                     _fig_sc.add_trace(go.Scatter(
-                        x=_bx, y=_by,
-                        fill="toself",
-                        fillcolor="rgba(22,163,74,0.12)",
-                        line=dict(color="rgba(0,0,0,0)"),
+                        x=list(_band_dates), y=_b_upper,
+                        mode="lines",
+                        line=dict(width=0, color="rgba(22,163,74,0)"),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    # Cota inferior → rellena hacia la traza anterior (±1σ)
+                    _fig_sc.add_trace(go.Scatter(
+                        x=list(_band_dates), y=_b_lower,
+                        mode="lines",
+                        fill="tonexty",
+                        fillcolor="rgba(22,163,74,0.15)",
+                        line=dict(width=0, color="rgba(22,163,74,0)"),
                         name="±1σ histórico (5a)",
                         hoverinfo="skip",
-                        showlegend=True,
                     ))
-
-                    # Línea de media histórica mensual
+                    # Media histórica mensual (línea discontinua)
                     _fig_sc.add_trace(go.Scatter(
-                        x=_band_dates, y=_b_mean,
-                        line=dict(color="rgba(22,163,74,0.45)", dash="dash", width=1.5),
+                        x=list(_band_dates), y=_b_mean,
+                        mode="lines",
+                        line=dict(color="rgba(22,163,74,0.55)", dash="dash", width=1.5),
                         name="Media histórica mensual (5a)",
                         hoverinfo="skip",
-                        showlegend=True,
                     ))
-
-                    # Puntos de escenas individuales (último año)
+                    # Escenas individuales último año
                     _fig_sc.add_trace(go.Scatter(
                         x=_df_sc["date"], y=_df_sc["median"],
                         mode="markers+lines",
-                        marker=dict(size=8, color="#15803d", symbol="circle"),
+                        marker=dict(size=8, color="#15803d"),
                         line=dict(color="#15803d", width=1.5),
                         name="NDVI escena (último año)",
                         hovertemplate="%{x|%d %b %Y}<br>NDVI: %{y:.4f}<extra></extra>",
                     ))
-
                     _fig_sc.update_layout(
-                        title=f"NDVI Sentinel-2 · último año ({_sel_ndv.get('n_scenes',0)} escenas, nubes <40%) · banda ±1σ sobre 5 años",
-                        xaxis_title="",
-                        yaxis_title="NDVI",
-                        height=300,
+                        title=(f"NDVI Sentinel-2 · último año "
+                               f"({_sel_ndv.get('n_scenes',0)} escenas, nubes <40%) "
+                               f"· banda ±1σ histórico 5 años"),
+                        xaxis_title="", yaxis_title="NDVI",
+                        height=320,
                         margin=dict(t=45, b=20),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                                     xanchor="right", x=1),
