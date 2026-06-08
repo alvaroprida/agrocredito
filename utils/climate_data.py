@@ -57,7 +57,8 @@ def get_historical_climate(
 
     hourly_vars = _HOURLY_BASE + [v for v in (extra_hourly or []) if v not in _HOURLY_BASE]
 
-    resp = requests.get(OPEN_METEO_URL, params={
+    import time as _time
+    _params = {
         "latitude":   lat,
         "longitude":  lon,
         "start_date": start.isoformat(),
@@ -65,8 +66,15 @@ def get_historical_climate(
         "daily":      ",".join(_DAILY_VARS),
         "hourly":     ",".join(hourly_vars),
         "timezone":   "auto",
-    }, timeout=60)
-    resp.raise_for_status()
+    }
+    for _attempt in range(5):
+        resp = requests.get(OPEN_METEO_URL, params=_params, timeout=60)
+        if resp.status_code == 429:
+            _wait = int(resp.headers.get("Retry-After", 2 ** (_attempt + 1)))
+            _time.sleep(min(_wait, 60))
+            continue
+        resp.raise_for_status()
+        break
     raw = resp.json()
 
     # ── DataFrame diario ─────────────────────────────────────────────

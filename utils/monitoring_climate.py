@@ -44,7 +44,8 @@ def _download_forecast(
     forecast_days: int = 14,
 ) -> pd.DataFrame:
     """Descarga serie reciente + forecast desde Open-Meteo Forecast API."""
-    resp = requests.get(FORECAST_URL, params={
+    import time
+    _params = {
         "latitude":      lat,
         "longitude":     lon,
         "daily":         ",".join(_DAILY_VARS),
@@ -52,8 +53,15 @@ def _download_forecast(
         "past_days":     past_days,
         "forecast_days": forecast_days,
         "timezone":      "auto",
-    }, timeout=30)
-    resp.raise_for_status()
+    }
+    for _attempt in range(5):
+        resp = requests.get(FORECAST_URL, params=_params, timeout=30)
+        if resp.status_code == 429:
+            _wait = int(resp.headers.get("Retry-After", 2 ** (_attempt + 1)))
+            time.sleep(min(_wait, 60))
+            continue
+        resp.raise_for_status()
+        break
     raw = resp.json()
 
     df = pd.DataFrame(raw["daily"])
