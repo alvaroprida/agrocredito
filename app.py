@@ -182,7 +182,7 @@ def _ndvi_indicators(ndvi_result: dict) -> dict:
     hist   = ndvi_result.get("hist_monthly", {})
     empty  = {"n_scenes": 0, "last_date": None, "last_ndvi": None,
                "prev_date": None, "prev_ndvi": None,
-               "a1_pct": None, "a1_sem": None, "a2_val": None, "a2_sem": None}
+               "a1_pct": None, "a1_sem": "verde", "a2_val": None, "a2_sem": "verde"}
     if not scenes:
         return empty
     n    = len(scenes)
@@ -878,9 +878,9 @@ with tab_monitoreo:
             _pd_     = _ndv.get("prev_date")
             _pv      = _ndv.get("prev_ndvi")
             _a1p     = _ndv.get("a1_pct")
-            _a1s     = _ndv.get("a1_sem", "verde")
+            _a1s     = _ndv.get("a1_sem") or "verde"
             _a2v     = _ndv.get("a2_val")
-            _a2s     = _ndv.get("a2_sem", "verde")
+            _a2s     = _ndv.get("a2_sem") or "verde"
 
             _last_str = f"{_ld}  /  {_lv:.3f}" if (_ld and _lv is not None) else "—"
             _prev_str = f"{_pd_}  /  {_pv:.3f}" if (_pd_ and _pv is not None) else "—"
@@ -938,9 +938,9 @@ with tab_monitoreo:
                 _pd_  = _sel_ndv.get("prev_date")
                 _pv   = _sel_ndv.get("prev_ndvi")
                 _a1p  = _sel_ndv.get("a1_pct")
-                _a1s  = _sel_ndv.get("a1_sem", "verde")
+                _a1s  = _sel_ndv.get("a1_sem") or "verde"
                 _a2v  = _sel_ndv.get("a2_val")
-                _a2s  = _sel_ndv.get("a2_sem", "verde")
+                _a2s  = _sel_ndv.get("a2_sem") or "verde"
                 _lag  = (date.today() - date.fromisoformat(_ld)).days
 
                 st.caption(
