@@ -109,34 +109,44 @@ def _get_monitoring_cached(lat: float, lon: float):
     return get_monitoring_series(lat, lon, n_hist_years=5)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_monitoring_ndvi_cached(geojson_str: str, n_years: int, api_key: str):
+def _get_monitoring_ndvi_cached(geojson_str: str, n_years: int):
     """
-    Descarga serie NDVI via EOSDA Field Analytics API (misma que usa B2 en Tab 1).
-    Recibe el polígono como GeoJSON string (hashable para cache).
+    Serie NDVI por escena Sentinel-2 via Element84 STAC (gratuito, sin API key,
+    sin límites de fields). Retorna [{date, median}] serializable por st.cache_data.
     """
     import numpy as _np
-    from utils.eosda_ndvi import (
-        _fa_create_field, _fa_delete_field,
-        _fa_fetch_year, _fa_year_ranges,
-    )
+    from concurrent.futures import ThreadPoolExecutor as _Pool, as_completed as _done
     from shapely.geometry import shape as _shape
+    from utils.stac_ndvi import (
+        _search_scenes, _target_grid, _predio_mask, _process_scene,
+    )
+
     _geom = _shape(json.loads(geojson_str))
     _gdf  = gpd.GeoDataFrame(geometry=[_geom], crs="EPSG:4326")
+    _bbox = list(_gdf.to_crs("EPSG:4326").total_bounds)
 
-    _field_id = _fa_create_field(_gdf, api_key)
-    try:
-        _records: list = []
-        for _s, _e in _fa_year_ranges(n_years):
-            try:
-                _records.extend(_fa_fetch_year(_field_id, _s, _e, api_key, max_cloud=20))
-            except Exception:
-                pass
-    finally:
-        _fa_delete_field(_field_id, api_key)
+    _items = _search_scenes(_bbox, n_years=n_years, pre_cloud=50)
+    if not _items:
+        return []
+
+    _epsg, _tfm, _shape_hw = _target_grid(_gdf)
+    _pmask                 = _predio_mask(_gdf, _epsg, _tfm, _shape_hw)
+
+    _results: dict = {}
+    with _Pool(max_workers=8) as _pool:
+        _futs = {
+            _pool.submit(_process_scene, _item, _epsg, _tfm, _shape_hw, _pmask, 20.0): _item
+            for _item in _items
+        }
+        for _fut in _done(_futs):
+            _date, _ndvi = _fut.result()
+            if _ndvi is not None:
+                _results[_date] = _ndvi
 
     return sorted(
-        [r for r in _records
-         if isinstance(r.get("median"), (int, float)) and not _np.isnan(r["median"])],
+        [{"date": _d, "median": float(_np.nanmean(_arr[_pmask]))}
+         for _d, _arr in _results.items()
+         if _pmask.any()],
         key=lambda x: x["date"],
     )
 
@@ -865,60 +875,44 @@ with tab_monitoreo:
                 )
                 _ndvi_cache_key = f"mon_ndvi_{_sel_name}"
 
-                # API key EOSDA
-                try:
-                    _eosda_key = st.secrets.get("EOSDA_API_KEY", "")
-                except Exception:
-                    import os as _os
-                    _eosda_key = _os.environ.get("EOSDA_API_KEY", "")
+                # Obtener polígono catastral desde PostGIS
+                _lat_n = float(_sel_p["lat"])
+                _lon_n = float(_sel_p["lon"])
+                with st.spinner("Consultando polígono catastral…"):
+                    _predio_data = _get_predio_monitoring_cached(_lat_n, _lon_n)
 
-                if not _eosda_key:
-                    st.warning(
-                        "Análisis NDVI no disponible: configura **EOSDA_API_KEY** "
-                        "en los secrets de Streamlit.",
-                        icon="⚠️",
-                    )
+                if _predio_data and _predio_data.get("geojson"):
+                    _gjson   = json.dumps(_predio_data["geojson"])
+                    _area_ha = _predio_data.get("area_ha", "?")
+                    _codigo  = _predio_data.get("codigo", "—")
+                    st.caption(f"Polígono catastral: `{_codigo}` · {_area_ha} ha")
                 else:
-                    # Obtener polígono catastral desde PostGIS
-                    _lat_n = float(_sel_p["lat"])
-                    _lon_n = float(_sel_p["lon"])
-                    with st.spinner("Consultando polígono catastral…"):
-                        _predio_data = _get_predio_monitoring_cached(_lat_n, _lon_n)
+                    # Fallback: bbox 500 m × 500 m
+                    _d = 0.0025
+                    _gjson = json.dumps({
+                        "type": "Polygon",
+                        "coordinates": [[
+                            [_lon_n - _d, _lat_n - _d],
+                            [_lon_n + _d, _lat_n - _d],
+                            [_lon_n + _d, _lat_n + _d],
+                            [_lon_n - _d, _lat_n + _d],
+                            [_lon_n - _d, _lat_n - _d],
+                        ]],
+                    })
+                    st.caption(
+                        "⚠️ Predio no encontrado en catastro — usando área aproximada de 500 m × 500 m"
+                    )
 
-                    if _predio_data and _predio_data.get("geojson"):
-                        _gjson = json.dumps(_predio_data["geojson"])
-                        _area_ha = _predio_data.get("area_ha", "?")
-                        _codigo  = _predio_data.get("codigo", "—")
-                        st.caption(f"Polígono catastral: `{_codigo}` · {_area_ha} ha")
-                    else:
-                        # Fallback: bbox 500 m × 500 m
-                        _d = 0.0025
-                        _gjson = json.dumps({
-                            "type": "Polygon",
-                            "coordinates": [[
-                                [_lon_n - _d, _lat_n - _d],
-                                [_lon_n + _d, _lat_n - _d],
-                                [_lon_n + _d, _lat_n + _d],
-                                [_lon_n - _d, _lat_n + _d],
-                                [_lon_n - _d, _lat_n - _d],
-                            ]],
-                        })
-                        st.caption(
-                            "⚠️ Predio no encontrado en catastro — usando área aproximada de 500 m × 500 m"
-                        )
+                _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
 
-                    _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
-
-                    if _btn_ndvi:
-                        with st.spinner("Consultando Sentinel-2 vía EOSDA Field Analytics (puede tardar ~30 s)…"):
-                            try:
-                                _scenes = _get_monitoring_ndvi_cached(
-                                    _gjson, 3, _eosda_key
-                                )
-                                st.session_state[_ndvi_cache_key] = _scenes
-                            except Exception as _e:
-                                st.error(f"Error EOSDA: {_e}")
-                                st.session_state.pop(_ndvi_cache_key, None)
+                if _btn_ndvi:
+                    with st.spinner("Descargando escenas Sentinel-2 via STAC (puede tardar ~30 s)…"):
+                        try:
+                            _scenes = _get_monitoring_ndvi_cached(_gjson, 3)
+                            st.session_state[_ndvi_cache_key] = _scenes
+                        except Exception as _e:
+                            st.error(f"Error STAC/NDVI: {_e}")
+                            st.session_state.pop(_ndvi_cache_key, None)
 
                     _scenes = st.session_state.get(_ndvi_cache_key)
 

@@ -18,3 +18,4 @@ Pillow>=10.0.0
 matplotlib>=3.8.0
 reportlab>=4.0
 openpyxl>=3.1.0
+pystac-client>=0.7.0
