@@ -116,11 +116,15 @@ def get_monitoring_series(lat: float, lon: float, n_hist_years: int = 5) -> dict
         era5_end       : date (último día ERA5 disponible)
         forecast_start : date (primer día de pronóstico puro)
     """
+    import time as _t
     today    = date.today()
     era5_end = today - timedelta(days=ERA5_LAG_DAYS)
 
     # ERA5 histórico completo: climatología YTD y mensual
     hist_df  = get_historical_climate(lat, lon, n_years=n_hist_years)
+
+    # Pausa entre las dos llamadas a Open-Meteo para evitar rate limiting
+    _t.sleep(2)
 
     # Serie reciente (past_days cubre brecha ERA5) + 14 días de pronóstico
     fcast_df = _download_forecast(lat, lon, past_days=30, forecast_days=14)
