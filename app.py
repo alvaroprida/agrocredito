@@ -109,10 +109,10 @@ def _get_monitoring_cached(lat: float, lon: float):
     return get_monitoring_series(lat, lon, n_hist_years=5)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_monitoring_ndvi_cached(geojson_str: str, _v: int = 3):
+def _get_monitoring_ndvi_cached(geojson_str: str, _v: int = 4):
     """
     GEE: escenas individuales (último 1 año) para el gráfico + todas las escenas
-    de los últimos 5 años descargadas en una sola llamada para calcular en Python
+    de los últimos 10 años descargadas en una sola llamada para calcular en Python
     la media y desv. estándar mensual por mes de calendario.
     Retorna {"scenes": [{date, median}],
              "hist_monthly": {1..12: {"mean": float, "std": float}}}.
@@ -130,7 +130,7 @@ def _get_monitoring_ndvi_cached(geojson_str: str, _v: int = 3):
     _now   = _dt.utcnow()
     _d1    = _now.strftime("%Y-%m-%d")
     _d_1yr = (_now - _td(days=365)).strftime("%Y-%m-%d")
-    _d_5yr = (_now - _td(days=365 * 5)).strftime("%Y-%m-%d")
+    _d_5yr = (_now - _td(days=365 * 10)).strftime("%Y-%m-%d")
 
     def _s2_col(d_start, d_end):
         return (
@@ -161,7 +161,7 @@ def _get_monitoring_ndvi_cached(geojson_str: str, _v: int = 3):
         key=lambda x: x["date"],
     )
 
-    # ── 2. Escenas 5 años → stats mensuales en Python (evita complejidad GEE) ─
+    # ── 2. Escenas 10 años → stats mensuales en Python (evita complejidad GEE) ─
     # ee.List.reduce() devuelve un dict, no un escalar → cálculo en Python.
     _raw_5yr = _s2_col(_d_5yr, _d1).map(_scene_feat).getInfo()["features"]
     _monthly_vals: dict = _dd(list)
@@ -1051,7 +1051,7 @@ with tab_monitoreo:
                     st.plotly_chart(_fig, use_container_width=True)
                     st.caption(
                         f"Puntos: {len(_scenes_plot)} escenas Sentinel-2 último año (nubes <40%)  ·  "
-                        f"Banda sombreada: ±1σ histórico 5 años por mes  ·  "
+                        f"Banda sombreada: ±1σ histórico 10 años por mes  ·  "
                         f"Línea discontinua: media histórica mensual"
                     )
 
