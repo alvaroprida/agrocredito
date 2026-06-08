@@ -109,7 +109,7 @@ def _get_monitoring_cached(lat: float, lon: float):
     return get_monitoring_series(lat, lon, n_hist_years=5)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_monitoring_ndvi_cached(geojson_str: str):
+def _get_monitoring_ndvi_cached(geojson_str: str, _v: int = 3):
     """
     GEE: escenas individuales (último 1 año) para el gráfico + todas las escenas
     de los últimos 5 años descargadas en una sola llamada para calcular en Python
@@ -859,6 +859,17 @@ with tab_monitoreo:
         st.markdown("---")
         st.markdown("### 🗂️ Portafolio Activo · Resumen de Indicadores")
 
+        # Nombres de fenómenos por indicador (para la tabla de resumen)
+        _IND_NOMBRES = {
+            "B1": "Déficit hídrico",
+            "B2": "Sequía",
+            "B3": "Lluvia excesiva",
+            "C1": "Calor",
+            "C2": "Frío/helada",
+            "D1": "Enfermedad",
+            "E1": "Viento",
+        }
+
         def _veg_cell(ndv: dict) -> str:
             """Indicador vegetación combinado A1+A2: toma el peor semáforo."""
             if "error" in ndv:
@@ -867,7 +878,6 @@ with tab_monitoreo:
             _a2s = ndv.get("a2_sem") or "verde"
             _a1p = ndv.get("a1_pct")
             _a2v = ndv.get("a2_val")
-            # Hipótesis combinación: cualquier señal de deterioro activa alerta
             _sem = max([_a1s, _a2s], key=lambda s: SEM_ORDER.get(s, 0))
             if not ndv.get("last_date"):
                 return "— Sin escenas"
@@ -879,7 +889,7 @@ with tab_monitoreo:
             return f"{SEM_ICON[_sem]} " + (" · ".join(_parts) if _parts else "—")
 
         def _clima_cell(clim: dict, horizon: str) -> str:
-            """Semáforo clima + nombres de indicadores en alerta (si los hay)."""
+            """Semáforo clima + fenómenos en alerta (nombre, no código)."""
             if "error" in clim:
                 return "❌"
             _h   = clim.get(horizon, {})
@@ -887,11 +897,12 @@ with tab_monitoreo:
             _ico = SEM_ICON.get(_g, "⚪")
             if _g == "verde":
                 return _ico
-            _alerts = sorted(
-                _iid for _iid, _ind in _h.items()
+            _alerts = [
+                _IND_NOMBRES.get(_iid, _iid)
+                for _iid, _ind in sorted(_h.items())
                 if _iid != "global" and _ind is not None
                 and SEM_ORDER.get(_ind.get("semaforo", "verde"), 0) > 0
-            )
+            ]
             return f"{_ico} {', '.join(_alerts)}" if _alerts else _ico
 
         _rows = []
@@ -1011,33 +1022,56 @@ with tab_monitoreo:
 
                     _fig_sc = go.Figure()
 
-                    # Cota superior (sin leyenda, base del fill tonexty)
+                    # ── Banda ±1σ: un add_shape por mes (más robusto que fill) ──
+                    # Traza dummy para la leyenda de la banda
                     _fig_sc.add_trace(go.Scatter(
-                        x=list(_band_dates), y=_b_upper,
-                        mode="lines",
-                        line=dict(width=0, color="rgba(22,163,74,0)"),
-                        showlegend=False,
+                        x=[None], y=[None], mode="markers",
+                        marker=dict(size=12, color="rgba(22,163,74,0.25)",
+                                    symbol="square"),
+                        name="±1σ histórico (5a)", showlegend=True,
                         hoverinfo="skip",
                     ))
-                    # Cota inferior → rellena hacia la traza anterior (±1σ)
+                    # Traza dummy para la leyenda de la media
                     _fig_sc.add_trace(go.Scatter(
-                        x=list(_band_dates), y=_b_lower,
-                        mode="lines",
-                        fill="tonexty",
-                        fillcolor="rgba(22,163,74,0.15)",
-                        line=dict(width=0, color="rgba(22,163,74,0)"),
-                        name="±1σ histórico (5a)",
+                        x=[None], y=[None], mode="lines",
+                        line=dict(color="rgba(22,163,74,0.6)", dash="dash", width=1.5),
+                        name="Media histórica mensual (5a)", showlegend=True,
                         hoverinfo="skip",
                     ))
-                    # Media histórica mensual (línea discontinua)
-                    _fig_sc.add_trace(go.Scatter(
-                        x=list(_band_dates), y=_b_mean,
-                        mode="lines",
-                        line=dict(color="rgba(22,163,74,0.55)", dash="dash", width=1.5),
-                        name="Media histórica mensual (5a)",
-                        hoverinfo="skip",
-                    ))
-                    # Escenas individuales último año
+
+                    # Una shape rect + una shape line por cada mes del rango
+                    _band_months = pd.date_range(
+                        _df_sc["date"].min().to_period("M").to_timestamp(),
+                        _df_sc["date"].max().to_period("M").to_timestamp() + pd.offsets.MonthEnd(1),
+                        freq="MS",
+                    )
+                    for _bmd in _band_months:
+                        _he = _hist_m5.get(_bmd.month, {})
+                        if not isinstance(_he, dict) or _he.get("mean") is None:
+                            continue
+                        _mn = _he["mean"]
+                        _sd = _he.get("std", 0) or 0
+                        _m_end = _bmd + pd.offsets.MonthEnd(1)
+                        # Rectángulo ±1σ
+                        _fig_sc.add_shape(
+                            type="rect",
+                            x0=_bmd, x1=_m_end,
+                            y0=_mn - _sd, y1=_mn + _sd,
+                            fillcolor="rgba(22,163,74,0.15)",
+                            line_width=0,
+                            layer="below",
+                        )
+                        # Línea de media
+                        _fig_sc.add_shape(
+                            type="line",
+                            x0=_bmd, x1=_m_end,
+                            y0=_mn, y1=_mn,
+                            line=dict(color="rgba(22,163,74,0.6)",
+                                      dash="dash", width=1.5),
+                            layer="below",
+                        )
+
+                    # Escenas individuales último año (encima de la banda)
                     _fig_sc.add_trace(go.Scatter(
                         x=_df_sc["date"], y=_df_sc["median"],
                         mode="markers+lines",
@@ -1051,7 +1085,7 @@ with tab_monitoreo:
                                f"({_sel_ndv.get('n_scenes',0)} escenas, nubes <40%) "
                                f"· banda ±1σ histórico 5 años"),
                         xaxis_title="", yaxis_title="NDVI",
-                        height=320,
+                        height=340,
                         margin=dict(t=45, b=20),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                                     xanchor="right", x=1),
