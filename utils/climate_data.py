@@ -67,14 +67,15 @@ def get_historical_climate(
         "hourly":     ",".join(hourly_vars),
         "timezone":   "auto",
     }
-    for _attempt in range(5):
+    for _attempt in range(6):
         resp = requests.get(OPEN_METEO_URL, params=_params, timeout=60)
-        if resp.status_code == 429:
-            _wait = int(resp.headers.get("Retry-After", 2 ** (_attempt + 1)))
-            _time.sleep(min(_wait, 60))
-            continue
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            break
+        _wait = int(resp.headers.get("Retry-After", 2 ** (_attempt + 1)))
+        _time.sleep(min(_wait, 60))
+    else:
         resp.raise_for_status()
-        break
     raw = resp.json()
 
     # ── DataFrame diario ─────────────────────────────────────────────

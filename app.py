@@ -808,10 +808,13 @@ with tab_monitoreo:
         )
 
     if _calc_btn:
+        import time as _tslp
         _results_map: dict = {}
         _total = len(_portfolio)
         _prog  = st.progress(0, text="Iniciando…")
         for _i, _p in enumerate(_portfolio):
+            if _i > 0:
+                _tslp.sleep(1.5)  # evita 429 en Open-Meteo (máx ~1 req/s)
             _nm = _p["nombre_predio"]
             _prog.progress(_i / (_total * 2),
                            text=f"[{_i+1}/{_total}] Clima · {_nm}…")
