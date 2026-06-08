@@ -871,25 +871,28 @@ with tab_monitoreo:
         }
 
         def _veg_cell(ndv: dict) -> str:
-            """Indicador vegetación combinado A1+A2: toma el peor semáforo."""
             if "error" in ndv:
                 return "❌ Error GEE"
             _a1s = ndv.get("a1_sem") or "verde"
             _a2s = ndv.get("a2_sem") or "verde"
             _a1p = ndv.get("a1_pct")
             _a2v = ndv.get("a2_val")
+            _lv  = ndv.get("last_ndvi")
             _sem = max([_a1s, _a2s], key=lambda s: SEM_ORDER.get(s, 0))
             if not ndv.get("last_date"):
                 return "— Sin escenas"
             if _sem == "verde":
-                return f"{SEM_ICON['verde']} Normal"
+                return SEM_ICON["verde"]
             _parts = []
-            if _a1p is not None: _parts.append(f"A1: {_a1p:+.1f}%")
-            if _a2v is not None: _parts.append(f"A2: {_a2v:+.4f}")
+            if _lv is not None and _a1p is not None:
+                _parts.append(f"Valor NDVI: {_lv:.3f} ({_a1p:+.1f}%)")
+            elif _a1p is not None:
+                _parts.append(f"Valor NDVI: ({_a1p:+.1f}%)")
+            if _a2v is not None:
+                _parts.append(f"Tendencia NDVI: {_a2v:+.4f}")
             return f"{SEM_ICON[_sem]} " + (" · ".join(_parts) if _parts else "—")
 
         def _clima_cell(clim: dict, horizon: str) -> str:
-            """Semáforo clima + fenómenos en alerta (nombre, no código)."""
             if "error" in clim:
                 return "❌"
             _h   = clim.get(horizon, {})
@@ -905,6 +908,12 @@ with tab_monitoreo:
             ]
             return f"{_ico} {', '.join(_alerts)}" if _alerts else _ico
 
+        st.caption(
+            "🟢 Sin alerta  ·  🟡 Precaución — contacto proactivo  ·  "
+            "🔴 Alerta — intervención recomendada  ·  "
+            "Cuando hay alerta, se indica la causa al lado del semáforo."
+        )
+
         _rows = []
         for _p in _portfolio:
             _nm   = _p["nombre_predio"]
@@ -912,12 +921,12 @@ with tab_monitoreo:
             _clim = _rec.get("clima", {})
             _ndv  = _rec.get("ndvi",  {})
             _rows.append({
-                "Predio":        _nm,
-                "Cultivo":       _p["cultivo"],
-                "Vegetación NDVI": _veg_cell(_ndv),
-                "Clima Hoy":     _clima_cell(_clim, "Hoy"),
-                "Clima +7d":     _clima_cell(_clim, "+7 días"),
-                "Clima +14d":    _clima_cell(_clim, "+14 días"),
+                "Predio":                 _nm,
+                "Cultivo":                _p["cultivo"],
+                "Vegetación NDVI (Hoy)":  _veg_cell(_ndv),
+                "Clima (Hoy)":            _clima_cell(_clim, "Hoy"),
+                "Clima (+7d)":            _clima_cell(_clim, "+7 días"),
+                "Clima (+14d)":           _clima_cell(_clim, "+14 días"),
             })
 
         st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
