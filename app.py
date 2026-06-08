@@ -114,6 +114,10 @@ def _get_monitoring_ndvi_cached(geojson_str: str, date_start: str, date_end: str
     return _do_fetch(geojson_str, date_start, date_end, api_key)
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _get_predio_monitoring_cached(lat: float, lon: float):
+    return get_predio_por_punto(lat, lon)
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def _get_distancia_centro_cached(lat: float, lon: float, v: int = 2):
     return get_distancia_centro_urbano(lat, lon)
 
@@ -2321,7 +2325,7 @@ with tab_monitoreo:
                 )
                 _ndvi_cache_key = f"mon_ndvi_{_sel_name}"
 
-                # Comprobar API key
+                # API key EOSDA
                 try:
                     _eosda_key = st.secrets.get("EOSDA_API_KEY", "")
                 except Exception:
@@ -2335,15 +2339,20 @@ with tab_monitoreo:
                         icon="⚠️",
                     )
                 else:
-                    _btn_ndvi = st.button(
-                        "🛰️ Calcular NDVI",
-                        key=f"btn_mon_ndvi_{_sel_name}",
-                    )
-                    if _btn_ndvi:
-                        # Polígono ~300 m × 300 m alrededor del punto
-                        _lat_n = float(_sel_p["lat"])
-                        _lon_n = float(_sel_p["lon"])
-                        _d = 0.0015  # ≈ 165 m
+                    # Obtener polígono catastral desde PostGIS
+                    _lat_n = float(_sel_p["lat"])
+                    _lon_n = float(_sel_p["lon"])
+                    with st.spinner("Consultando polígono catastral…"):
+                        _predio_data = _get_predio_monitoring_cached(_lat_n, _lon_n)
+
+                    if _predio_data and _predio_data.get("geojson"):
+                        _gjson = json.dumps(_predio_data["geojson"])
+                        _area_ha = _predio_data.get("area_ha", "?")
+                        _codigo  = _predio_data.get("codigo", "—")
+                        st.caption(f"Polígono catastral: `{_codigo}` · {_area_ha} ha")
+                    else:
+                        # Fallback: bbox 500 m × 500 m
+                        _d = 0.0025
                         _gjson = json.dumps({
                             "type": "Polygon",
                             "coordinates": [[
@@ -2354,9 +2363,16 @@ with tab_monitoreo:
                                 [_lon_n - _d, _lat_n - _d],
                             ]],
                         })
+                        st.caption(
+                            "⚠️ Predio no encontrado en catastro — usando área aproximada de 500 m × 500 m"
+                        )
+
+                    _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
+
+                    if _btn_ndvi:
                         _d_end   = date.today().strftime("%Y-%m-%d")
                         _d_start = (date.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-                        with st.spinner("Consultando Sentinel-2 vía EOSDA…"):
+                        with st.spinner("Consultando Sentinel-2 vía EOSDA (puede tardar ~30 s)…"):
                             try:
                                 _scenes = _get_monitoring_ndvi_cached(
                                     _gjson, _d_start, _d_end, _eosda_key
@@ -2369,50 +2385,53 @@ with tab_monitoreo:
                     _scenes = st.session_state.get(_ndvi_cache_key)
 
                     if _scenes is None:
-                        st.info("Pulsa **Calcular NDVI** para consultar las escenas Sentinel-2.", icon="👆")
+                        st.info(
+                            "Pulsa **Calcular NDVI** para consultar las escenas Sentinel-2.",
+                            icon="👆",
+                        )
                     elif len(_scenes) == 0:
-                        st.warning("No se obtuvieron escenas válidas (nubes <20%) en los últimos 3 años.")
+                        st.warning(
+                            "No se obtuvieron escenas válidas (nubes <20%) para este predio "
+                            "en los últimos 3 años."
+                        )
                     else:
                         _df_sc = pd.DataFrame(_scenes).copy()
                         _df_sc["date"]  = pd.to_datetime(_df_sc["date"])
                         _df_sc["month"] = _df_sc["date"].dt.month
                         _df_sc = _df_sc.sort_values("date").reset_index(drop=True)
 
-                        # Media histórica por mes
                         _monthly_hist = _df_sc.groupby("month")["median"].mean()
-
-                        # Escena más reciente y anterior
-                        _last   = _df_sc.iloc[-1]
-                        _ndvi_c = float(_last["median"])
-                        _last_d = _last["date"]
+                        _last     = _df_sc.iloc[-1]
+                        _ndvi_c   = float(_last["median"])
+                        _last_d   = _last["date"]
                         _days_lag = (date.today() - _last_d.date()).days
-                        _hist_m   = _monthly_hist.get(_last_d.month, np.nan)
+                        _hist_m   = float(_monthly_hist.get(_last_d.month, np.nan))
 
                         # A1: anomalía
                         _a1_pct = ((_ndvi_c - _hist_m) / _hist_m * 100
                                    if not pd.isna(_hist_m) and _hist_m > 0 else np.nan)
-                        _a1_sem = ("verde" if pd.isna(_a1_pct) or _a1_pct > -10
-                                   else ("amarillo" if _a1_pct > -25 else "rojo"))
+                        _a1_sem = ("verde"    if pd.isna(_a1_pct) or _a1_pct > -10
+                                   else "amarillo" if _a1_pct > -25 else "rojo")
 
                         # A2: tendencia
                         if len(_df_sc) >= 2:
                             _a2_val = round(_ndvi_c - float(_df_sc.iloc[-2]["median"]), 3)
                             _a2_sem = ("verde" if _a2_val >= -0.02
-                                       else ("amarillo" if _a2_val >= -0.05 else "rojo"))
+                                       else "amarillo" if _a2_val >= -0.05 else "rojo")
                         else:
                             _a2_val, _a2_sem = np.nan, "verde"
 
                         st.caption(
-                            f"Escena más reciente: **{_last_d.strftime('%d %b %Y')}** · "
-                            f"rezago {_days_lag} días · nubes < 20% · "
+                            f"Última escena: **{_last_d.strftime('%d %b %Y')}** · "
+                            f"rezago {_days_lag} días · nubes <20% · "
                             f"{len(_df_sc)} escenas válidas en 3 años"
                         )
 
                         _a_actions = {
                             "A1": {
                                 "verde":    "Sin acción requerida.",
-                                "amarillo": "Llamada al agricultor para verificar estado del cultivo; registrar en expediente.",
-                                "rojo":     "Solicitar evidencia fotográfica + visita técnica; activar documentación seguro agrícola.",
+                                "amarillo": "Llamada al agricultor; registrar en expediente.",
+                                "rojo":     "Solicitar fotos + visita técnica; activar documentación seguro.",
                             },
                             "A2": {
                                 "verde":    "Sin acción requerida.",
@@ -2423,7 +2442,7 @@ with tab_monitoreo:
                         _ca1, _ca2 = st.columns(2)
                         for _acol, _aid, _alabel, _adisp, _asem in [
                             (_ca1, "A1",
-                             "A1 · Anomalía NDVI vs. media histórica mes",
+                             "A1 · Anomalía NDVI vs. normal histórica mes",
                              (f"{_ndvi_c:.3f}  ({_a1_pct:+.1f}%)" if not pd.isna(_a1_pct)
                               else f"{_ndvi_c:.3f}  (sin normal histórica)"),
                              _a1_sem),
@@ -2448,12 +2467,11 @@ with tab_monitoreo:
                                     unsafe_allow_html=True,
                                 )
 
-                        # Serie temporal NDVI
                         _fig_sc = px.scatter(
                             _df_sc, x="date", y="median",
                             labels={"date": "", "median": "NDVI mediano"},
                             color_discrete_sequence=["#16a34a"],
-                            title="Serie NDVI · escenas Sentinel-2 válidas (3 años)",
+                            title="Serie NDVI · escenas Sentinel-2 (3 años, nubes <20%)",
                         )
                         if not pd.isna(_hist_m):
                             _fig_sc.add_hline(
