@@ -111,42 +111,52 @@ def _get_monitoring_cached(lat: float, lon: float):
 @st.cache_data(ttl=86400, show_spinner=False)
 def _get_monitoring_ndvi_cached(geojson_str: str, n_years: int):
     """
-    Serie NDVI por escena Sentinel-2 via Element84 STAC (gratuito, sin API key,
-    sin límites de fields). Retorna [{date, median}] serializable por st.cache_data.
+    Serie mensual NDVI via Google Earth Engine (Sentinel-2 SR Harmonized).
+    Solo obtiene la serie temporal — sin descarga de rásteres ni mapas.
+    Retorna [{date, median}] serializable por st.cache_data.
     """
-    import numpy as _np
-    from concurrent.futures import ThreadPoolExecutor as _Pool, as_completed as _done
-    from shapely.geometry import shape as _shape
-    from utils.stac_ndvi import (
-        _search_scenes, _target_grid, _predio_mask, _process_scene,
+    import ee as _ee
+    from datetime import datetime as _dt, timedelta as _td
+    from utils.gee_ndvi import _init_gee, _mask_s2_clouds
+
+    _init_gee()
+
+    _roi   = _ee.Geometry(json.loads(geojson_str))
+    _end   = _dt.utcnow()
+    _start = _end - _td(days=365 * n_years)
+    _d0    = _start.strftime("%Y-%m-%d")
+    _d1    = _end.strftime("%Y-%m-%d")
+
+    _s2 = (
+        _ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(_roi)
+        .filterDate(_d0, _d1)
+        .filter(_ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+        .map(_mask_s2_clouds)
+        .map(lambda img: img.normalizedDifference(["B8", "B4"])
+                            .rename("NDVI")
+                            .copyProperties(img, ["system:time_start"]))
     )
 
-    _geom = _shape(json.loads(geojson_str))
-    _gdf  = gpd.GeoDataFrame(geometry=[_geom], crs="EPSG:4326")
-    _bbox = list(_gdf.to_crs("EPSG:4326").total_bounds)
+    def _monthly(m_off):
+        m_off = _ee.Number(m_off)
+        t0    = _ee.Date(_d0).advance(m_off, "month")
+        t1    = t0.advance(1, "month")
+        mon   = _s2.filterDate(t0, t1)
+        val   = _ee.Algorithms.If(
+            mon.size().gt(0),
+            mon.mean().reduceRegion(_ee.Reducer.mean(), _roi, 10, maxPixels=1e8).get("NDVI", None),
+            None,
+        )
+        return _ee.Feature(None, {"date": t0.format("YYYY-MM-01"), "mean_ndvi": val})
 
-    _items = _search_scenes(_bbox, n_years=n_years, pre_cloud=50)
-    if not _items:
-        return []
-
-    _epsg, _tfm, _shape_hw = _target_grid(_gdf)
-    _pmask                 = _predio_mask(_gdf, _epsg, _tfm, _shape_hw)
-
-    _results: dict = {}
-    with _Pool(max_workers=8) as _pool:
-        _futs = {
-            _pool.submit(_process_scene, _item, _epsg, _tfm, _shape_hw, _pmask, 20.0): _item
-            for _item in _items
-        }
-        for _fut in _done(_futs):
-            _date, _ndvi = _fut.result()
-            if _ndvi is not None:
-                _results[_date] = _ndvi
+    _fc  = _ee.FeatureCollection(_ee.List.sequence(0, n_years * 12 - 1).map(_monthly))
+    _raw = _fc.getInfo()["features"]
 
     return sorted(
-        [{"date": _d, "median": float(_np.nanmean(_arr[_pmask]))}
-         for _d, _arr in _results.items()
-         if _pmask.any()],
+        [{"date": f["properties"]["date"],
+          "median": float(f["properties"]["mean_ndvi"])}
+         for f in _raw if f["properties"].get("mean_ndvi") is not None],
         key=lambda x: x["date"],
     )
 
@@ -906,7 +916,7 @@ with tab_monitoreo:
                 _btn_ndvi = st.button("🛰️ Calcular NDVI", key=f"btn_mon_ndvi_{_sel_name}")
 
                 if _btn_ndvi:
-                    with st.spinner("Descargando escenas Sentinel-2 via STAC (puede tardar ~30 s)…"):
+                    with st.spinner("Calculando serie NDVI mensual via Google Earth Engine (puede tardar ~30 s)…"):
                         try:
                             _scenes = _get_monitoring_ndvi_cached(_gjson, 3)
                             st.session_state[_ndvi_cache_key] = _scenes
