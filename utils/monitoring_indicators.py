@@ -263,8 +263,50 @@ def _c2(df: pd.DataFrame, cultivo: str, end_date: date) -> dict:
     }
 
 
-def _d1(df: pd.DataFrame, cultivo: str, end_date: date) -> dict | None:
-    """D1: días con condiciones favorables para la enfermedad principal — ventana 30d."""
+def _disease_mask(w: pd.DataFrame, disease: dict) -> pd.Series:
+    """Devuelve máscara booleana de días con condiciones favorables para la enfermedad."""
+    dtype = disease["type"]
+    if dtype == "rh":
+        return (
+            (w["tavg"].fillna(-999) >= disease["t_min"]) &
+            (w["tavg"].fillna(-999) <= disease["t_max"]) &
+            (w["rh_mean"].fillna(0)  > disease["rh"])
+        )
+    elif dtype == "rain":
+        return (
+            (w["tavg"].fillna(-999) >= disease["t_min"]) &
+            (w["tavg"].fillna(-999) <= disease["t_max"]) &
+            (w["pr"].fillna(0)       > 0)
+        )
+    elif dtype == "tmin_tavg":
+        return (
+            (w["tavg"].fillna(-999) > disease["t_min"]) &
+            (w["rh_mean"].fillna(0) > disease["rh"])
+        )
+    return pd.Series(False, index=w.index)
+
+
+def _d1_historical_normal(hist_df: pd.DataFrame, disease: dict, end_date: date) -> float | None:
+    """
+    Calcula la media histórica de días favorables para la enfermedad en la
+    misma ventana de 30 días del calendario, sobre todos los años en hist_df.
+    """
+    month_day = (end_date.month, end_date.day)
+    counts: list[int] = []
+    for yr, grp in hist_df.groupby("year"):
+        try:
+            end_hist = date(yr, *month_day)
+        except ValueError:
+            continue  # 29 feb en año no bisiesto
+        w = _win(grp, end_hist, 30)
+        if w.empty:
+            continue
+        counts.append(int(_disease_mask(w, disease).sum()))
+    return float(np.mean(counts)) if counts else None
+
+
+def _d1(df: pd.DataFrame, hist_df: pd.DataFrame, cultivo: str, end_date: date) -> dict | None:
+    """D1: anomalía de días favorables para la enfermedad vs. normal histórica — ventana 30d."""
     cfg     = _cfg(cultivo)
     disease = cfg.get("disease")
     if disease is None:
@@ -273,38 +315,30 @@ def _d1(df: pd.DataFrame, cultivo: str, end_date: date) -> dict | None:
     if w.empty:
         return None
 
-    dtype = disease["type"]
-    if dtype == "rh":
-        # tavg en rango AND rh_mean > umbral
-        mask = (
-            (w["tavg"].fillna(-999) >= disease["t_min"]) &
-            (w["tavg"].fillna(-999) <= disease["t_max"]) &
-            (w["rh_mean"].fillna(0)  > disease["rh"])
-        )
-    elif dtype == "rain":
-        # tavg en rango AND lluvia > 0
-        mask = (
-            (w["tavg"].fillna(-999) >= disease["t_min"]) &
-            (w["tavg"].fillna(-999) <= disease["t_max"]) &
-            (w["pr"].fillna(0)       > 0)
-        )
-    elif dtype == "tmin_tavg":
-        # tavg > umbral AND rh_mean > umbral (Sigatoka negra)
-        mask = (
-            (w["tavg"].fillna(-999) > disease["t_min"]) &
-            (w["rh_mean"].fillna(0) > disease["rh"])
-        )
-    else:
-        return None
+    days   = int(_disease_mask(w, disease).sum())
+    normal = _d1_historical_normal(hist_df, disease, end_date)
 
-    days = int(mask.sum())
-    sem  = _sem(days, 6, 16)
+    if normal is None or normal == 0:
+        # Sin referencia histórica: semáforo basado en días absolutos como fallback
+        sem = _sem(days, 6, 16)
+        display = f"{days} días favorables (sin normal histórica)"
+    else:
+        pct = days / normal * 100
+        if pct > 140 or days > normal + 7:
+            sem = "rojo"
+        elif pct > 115 or days > normal + 3:
+            sem = "amarillo"
+        else:
+            sem = "verde"
+        display = f"{days} días favorables (normal: {normal:.0f}d, {pct:.0f}% de la media)"
+
     return {
-        "label":    f"D1 · Días favorables {disease['name']}",
+        "label":    f"D1 · Condiciones favorables {disease['name']}",
         "value":    days,
+        "normal":   round(normal, 1) if normal is not None else None,
         "disease":  disease["name"],
         "unit":     "días / ventana 30d",
-        "display":  f"{days} días con condiciones favorables",
+        "display":  display,
         "semaforo": sem,
         "action":   _ACTIONS["D1"][sem],
     }
@@ -318,7 +352,7 @@ def _e1(df: pd.DataFrame, cultivo: str, end_date: date) -> dict | None:
         return None
     thr_kmh = round(thr_ms * 3.6, 0)
     w       = _win(df, end_date, 30)
-    days    = int((w["gw_10m"].fillna(0) > thr_ms).sum()) if not w.empty else 0
+    days    = int((w["gw_10m"].fillna(0) > thr_kmh).sum()) if not w.empty else 0
     sem     = _sem(days, 1, 5)
     return {
         "label":         f"E1 · Ráfagas > {thr_kmh:.0f} km/h",
@@ -349,6 +383,7 @@ def compute_all_indicators(
     cultivo:     str,
     ytd_clim:    dict,
     today:       date,
+    hist_df:     pd.DataFrame | None = None,
 ) -> dict:
     """
     Calcula indicadores B–E para los 3 horizontes temporales.
@@ -363,13 +398,14 @@ def compute_all_indicators(
     results: dict = {}
     for horizon, offset in HORIZONS.items():
         end  = today + timedelta(days=offset)
+        _hist = hist_df if hist_df is not None else combined_df
         inds = {
             "B1": _b1(combined_df, ytd_clim, end),
             "B2": _b2(combined_df, cultivo, end),
             "B3": _b3(combined_df, end),
             "C1": _c1(combined_df, cultivo, end),
             "C2": _c2(combined_df, cultivo, end),
-            "D1": _d1(combined_df, cultivo, end),
+            "D1": _d1(combined_df, _hist, cultivo, end),
             "E1": _e1(combined_df, cultivo, end),
         }
         active = {k: v for k, v in inds.items() if v is not None}

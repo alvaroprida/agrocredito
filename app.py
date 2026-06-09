@@ -820,6 +820,7 @@ with tab_monitoreo:
                 _clima  = compute_all_indicators(
                     _series["combined_df"], str(_p["cultivo"]),
                     _series["ytd_clim"], _series["today"],
+                    hist_df=_series["hist_df"],
                 )
             except Exception as _e:
                 _clima = {"error": str(_e)}
