@@ -909,6 +909,14 @@ with tab_monitoreo:
             ]
             return f"{_ico} {', '.join(_alerts)}" if _alerts else _ico
 
+        def _global_cell(clim: dict, ndv: dict) -> str:
+            _ns = (max([ndv.get("a1_sem","verde"), ndv.get("a2_sem","verde")],
+                       key=lambda s: SEM_ORDER.get(s, 0))
+                   if not ndv.get("error") and ndv.get("last_date") else "verde")
+            _cs = clim.get("Hoy", {}).get("global", "verde") if not clim.get("error") else "verde"
+            _g  = max([_ns, _cs], key=lambda s: SEM_ORDER.get(s, 0))
+            return f'{SEM_ICON[_g]} {"Normal" if _g=="verde" else "Precaución" if _g=="amarillo" else "Alerta"}'
+
         st.caption(
             "🟢 Sin alerta  ·  🟡 Precaución — contacto proactivo  ·  "
             "🔴 Alerta — intervención recomendada  ·  "
@@ -924,6 +932,7 @@ with tab_monitoreo:
             _rows.append({
                 "Predio":                 _nm,
                 "Cultivo":                _p["cultivo"],
+                "Alerta Global":          _global_cell(_clim, _ndv),
                 "Vegetación NDVI (Hoy)":  _veg_cell(_ndv),
                 "Clima (Hoy)":            _clima_cell(_clim, "Hoy"),
                 "Clima (+7d)":            _clima_cell(_clim, "+7 días"),
@@ -1103,6 +1112,42 @@ with tab_monitoreo:
                                 f'→ {_ind.get("action","")}</div></div>',
                                 unsafe_allow_html=True,
                             )
+        # ── Alerta Global del Predio ──────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🎯 Alerta Global del Predio")
+
+        _ndv_sem_g = (
+            max([_sel_ndv.get("a1_sem", "verde"), _sel_ndv.get("a2_sem", "verde")],
+                key=lambda s: SEM_ORDER.get(s, 0))
+            if not _sel_ndv.get("error") and _sel_ndv.get("last_date")
+            else "verde"
+        )
+        _cli_sem_g = (
+            _sel_clim.get("Hoy", {}).get("global", "verde")
+            if not _sel_clim.get("error") else "verde"
+        )
+        _global_sem_g = max([_ndv_sem_g, _cli_sem_g], key=lambda s: SEM_ORDER.get(s, 0))
+
+        _GLOBAL_LABEL  = {"verde": "Normal", "amarillo": "Precaución", "rojo": "Alerta Productiva"}
+        _GLOBAL_ACTION = {
+            "verde":    "Sin acción requerida. Mantener seguimiento periódico del portafolio.",
+            "amarillo": "Contacto proactivo con el agricultor en los próximos 5 días hábiles. Registrar observación en el expediente de crédito.",
+            "rojo":     "Intervención inmediata (< 48 h). Solicitar fotos de campo y evaluación técnica presencial. Evaluar opciones de reestructuración o alivio del crédito.",
+        }
+        st.markdown(
+            f'<div style="background:{SEM_BG[_global_sem_g]};border-left:8px solid {SEM_BD[_global_sem_g]};'
+            f'border-radius:8px;padding:1.1rem 1.4rem;margin:0.5rem 0 1rem 0">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:{SEM_TEXT[_global_sem_g]};margin-bottom:0.3rem">'
+            f'{SEM_ICON[_global_sem_g]} Alerta Global · '
+            f'<span style="font-size:1.5rem">{_GLOBAL_LABEL[_global_sem_g]}</span></div>'
+            f'<div style="font-size:0.92rem;font-weight:600;color:{SEM_TEXT[_global_sem_g]};margin-bottom:0.4rem">'
+            f'→ {_GLOBAL_ACTION[_global_sem_g]}</div>'
+            f'<div style="font-size:0.75rem;color:{SEM_TEXT[_global_sem_g]};opacity:0.85">'
+            f'Vegetación (A): {SEM_ICON[_ndv_sem_g]} · Clima — Hoy (B–E): {SEM_ICON[_cli_sem_g]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
     else:
         st.markdown("---")
         st.info("Pulsa **Calcular indicadores** para analizar el portafolio.", icon="👆")
@@ -1491,6 +1536,309 @@ siguiente cálculo de riesgo para ese cultivo.
             )
         except Exception as _e_mx:
             st.warning(f"No se pudo cargar la matriz de vulnerabilidad: {_e_mx}")
+
+    # ─── SCORE GLOBAL CONSOLIDADO PRE-CRÉDITO ────────────────────────────────
+    with st.expander("🎯 Score Global Consolidado · Validación Pre-Crédito", expanded=True):
+        st.markdown("""
+El score final consolida los resultados de todos los bloques en una única calificación de riesgo para la decisión de crédito.
+""")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Metodología de agregación**
+
+Cada bloque aporta un sub-score numérico en escala 1–4 (1 = sin restricción, 4 = riesgo crítico),
+ponderado por su peso relativo en la decisión crediticia.
+El score final es la **media ponderada** de los bloques calculados,
+redondeada al entero más cercano.
+
+Si un bloque no pudo calcularse (dato no disponible), su peso se redistribuye
+proporcionalmente entre los bloques disponibles.
+
+**Tabla de pesos**
+
+| Bloque | Indicador | Peso |
+|--------|-----------|------|
+| Existencia del predio | PostGIS / IGAC | 15 % |
+| A1 · Zona Agrícola (Frontera) | UPRA / IGAC | 15 % |
+| A2 · Área Efectiva Cultivable | DEM · NDVI · Catastro | 10 % |
+| B1 · Aptitud al Cultivo | UPRA · datos.gov.co | 15 % |
+| B2 · Actividad Productiva NDVI | EOSDA · Sentinel-2 | 15 % |
+| B3 · Altitud vs. Cultivo | DEM EOSDA | 0 % *(informativo)* |
+| C · Infraestructura / Acceso | OSM · OSRM | 15 % |
+| D · Riesgo Agroclimático | ERA5 · Open-Meteo · P80 | 15 % |
+| **Total** | | **100 %** |
+""")
+        with c2:
+            st.markdown("""
+**Sub-scores por bloque**
+
+| Bloque | Score 1 | Score 2 | Score 3 | Score 4 |
+|--------|---------|---------|---------|---------|
+| Existencia | Encontrado | — | — | No encontrado |
+| Frontera A1 | 🟢 No condicionada | 🟡 Condicionada | — | 🔴 Fuera de frontera |
+| Área A2 | ≥ 70 % efectiva | 40–70 % | — | < 40 % |
+| Aptitud B1 | Score ≥ 0.70 | 0.40–0.69 | < 0.40 | — |
+| NDVI B2 | > 40 % escenas activas | 20–40 % | < 20 % | — |
+| Infraestructura C | 🟢 Acceso adecuado | 🟡 Acceso medio | 🔴 Acceso bajo | — |
+| Riesgo D | Score P80 < 0.25 | 0.25–0.50 | 0.50–0.75 | ≥ 0.75 |
+
+**Tabla de decisión final**
+
+| Score Final | Dictamen | Acción recomendada |
+|-------------|----------|-------------------|
+| **1** ✅ | Apto sin restricciones relevantes | Proceder con el crédito bajo condiciones estándar |
+| **2** 🟡 | Apto con validaciones adicionales | Exigir documentación de soporte; seguimiento trimestral |
+| **3** ⚠️ | Requiere revisión manual | Análisis técnico adicional antes de aprobación; posible visita al predio |
+| **4** ⛔ | No recomendable bajo criterios actuales | Denegar o suspender; comunicar las razones específicas al solicitante |
+""")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # B · MONITOREO & FORECAST
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("📡 B · Monitoreo & Forecast")
+    st.caption(
+        "Metodología del sistema de monitoreo continuo de predios durante la vida del crédito. "
+        "Detecta señales tempranas de deterioro productivo para activar acciones preventivas "
+        "antes de que el agricultor entre en mora."
+    )
+
+    with st.expander("🏗️ Arquitectura y Fuentes de Datos", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Propósito**
+Detectar en tiempo real si las condiciones agroclimáticas o de vegetación
+de un predio en cartera se están deteriorando respecto a su comportamiento
+histórico normal, anticipando posibles problemas de producción y repago.
+
+**Fuentes de datos**
+
+| Fuente | Variable | Cobertura | Latencia |
+|--------|----------|-----------|----------|
+| ERA5 Reanalysis · Open-Meteo | Precipitación, temperatura, humedad, viento | Global, 0.25° | 6 días |
+| Open-Meteo Forecast API | Mismas variables + pronóstico | Global | Tiempo real |
+| Sentinel-2 L2A · GEE | NDVI por polígono del predio | 10 m | 5–16 días (revisita) |
+
+**Arquitectura de la serie climática**
+
+Para cubrir el rezago de 6 días de ERA5 y añadir pronóstico a 14 días,
+se usa la **Forecast API de Open-Meteo** con `past_days=30`:
+
+```
+ERA5 histórico (5 años) → climatología YTD y normal histórica mensual
+ERA5 reciente (hasta t−6d) + Forecast (t−6d a t+14d) → serie combinada continua
+```
+
+La serie combinada es continua sin saltos y cubre todos los horizontes de análisis.
+""")
+        with c2:
+            st.markdown("""
+**Tres horizontes temporales**
+
+Cada indicador climático se evalúa sobre tres ventanas:
+
+| Horizonte | Datos usados | Interpretación |
+|-----------|-------------|----------------|
+| **Hoy** | ERA5 reciente + past_days | ¿Qué estrés ha sufrido el cultivo? |
+| **+7 días** | ERA5 + pronóstico 7d | Si se cumple el pronóstico, ¿cómo estará? |
+| **+14 días** | ERA5 + pronóstico 14d | ¿Y en 2 semanas? |
+
+El horizonte retrospectivo (**Hoy**) es el más fiable (datos observados).
+Los horizontes de pronóstico (+7d, +14d) tienen incertidumbre creciente
+y se interpretan como señales de alerta temprana, no como certezas.
+
+**NDVI: solo horizonte retrospectivo**
+Los indicadores de vegetación (Bloque A) no tienen componente de pronóstico
+porque no existe modelo de forecast satelital. Se calcula sobre la escena
+más reciente disponible, independientemente de su fecha.
+""")
+
+    with st.expander("🛰️ Bloque A · Vegetación NDVI", expanded=True):
+        st.markdown("""
+**Fuente**: Sentinel-2 L2A armonizado · Google Earth Engine (GEE)
+**Filtro de nubes**: escenas con cobertura nubosa < 40 % dentro del predio
+**Historial**: 10 años de escenas para calcular la normal mensual histórica (media ± desviación estándar por mes de calendario)
+""")
+        st.markdown("""
+| ID | Riesgo | Variable | Definición | 🟢 Verde | 🟡 Amarillo | 🔴 Rojo |
+|----|--------|----------|------------|----------|-------------|---------|
+| **A1** | Deterioro productivo | NDVI mediano por escena (0–1) | Anomalía de la escena más reciente respecto a la **media histórica del mismo mes de calendario** (10 años GEE) | > −10 % vs. media | −10 % a −25 % | < −25 % |
+| **A2** | Deterioro productivo | NDVI mediano (0–1) | Variación del NDVI entre la escena más reciente y la escena inmediatamente anterior (Δ absoluto) | ≥ −0.02 | −0.02 a −0.05 | < −0.05 |
+""")
+        st.markdown("""
+**Semáforo del Bloque A** = peor resultado entre A1 y A2.
+
+**Notas operativas**
+- Se muestra la fecha de la última escena y el rezago en días desde esa fecha.
+- Si han transcurrido más de 45 días sin escena válida, el bloque se marca como "Sin dato fiable".
+- La banda sombreada en el gráfico representa ± 1 desviación estándar histórica; la línea discontinua es la media mensual.
+
+| Semáforo | Acción recomendada |
+|----------|--------------------|
+| 🟢 Verde | Sin acción. |
+| 🟡 Amarillo | Llamada al agricultor; registrar en expediente. |
+| 🔴 Rojo | Solicitar fotos de campo + visita técnica; activar documentación para seguro si corresponde. |
+""")
+
+    with st.expander("🌧️ Bloque B · Estrés Hídrico", expanded=True):
+        st.markdown("""
+**Fuente**: ERA5 + Open-Meteo Forecast API · Variable: precipitación diaria (mm)
+""")
+        st.markdown("""
+| ID | Riesgo | Definición | 🟢 Verde | 🟡 Amarillo | 🔴 Rojo |
+|----|--------|------------|----------|-------------|---------|
+| **B1** | Déficit / exceso hídrico estacional | Precipitación acumulada desde el 1 de enero (YTD) vs. **normal histórica YTD** del mismo día calendario (5 años ERA5). Detecta si el año en curso está siendo anormalmente seco o húmedo. | 70–130 % de la normal | 40–70 % ó 130–200 % | < 40 % ó > 200 % |
+| **B2** | Sequía aguda | Máximo número de **días consecutivos con precipitación < 1 mm** en ventana de 30 días. Umbral por cultivo. | < 50 % del umbral | 50–100 % del umbral | > umbral |
+| **B3** | Exceso hídrico / encharcamiento | Máximo número de **días consecutivos con precipitación > 30 mm/día** en ventana de 30 días. | 0–1 días | 2–3 días | ≥ 4 días |
+""")
+        st.markdown("""
+**Umbrales B2 por cultivo (días consecutivos secos)**
+
+| Café | Cacao | Papa | Plátano | Aguacate | Maíz |
+|------|-------|------|---------|----------|------|
+| 45 d | 20 d | 15 d | 20 d | 30 d | 25 d |
+
+| Semáforo | B1 | B2 | B3 |
+|----------|----|----|----|
+| 🟢 Verde | Sin acción | Sin acción | Sin acción |
+| 🟡 Amarillo | Verificar estrés hídrico con agricultor; monitorear próxima quincena | Contacto preventivo; alertar sobre riesgo de sequía | Alerta de posible daño por exceso de humedad |
+| 🔴 Rojo | Activar protocolo de alivio si hay pérdida verificable | Verificar disponibilidad de riego; evaluar extensión de plazo | Documentar evento para seguro; solicitar fotos de campo |
+""")
+
+    with st.expander("🌡️ Bloque C · Estrés Térmico", expanded=True):
+        st.markdown("""
+**Fuente**: ERA5 + Open-Meteo Forecast API · Variables: temperatura máxima y mínima diaria (°C)
+""")
+        st.markdown("""
+| ID | Riesgo | Definición | 🟢 Verde | 🟡 Amarillo | 🔴 Rojo |
+|----|--------|------------|----------|-------------|---------|
+| **C1** | Estrés térmico por calor | **Media de temperatura máxima** en ventana de 14 días vs. umbral fisiológico por cultivo. Detecta estrés térmico acumulado sostenido. | < umbral cultivo | Umbral a umbral + 3 °C | > umbral + 3 °C |
+| **C2** | Estrés térmico por frío | Número de días con **temperatura mínima por debajo del umbral de frío** del cultivo en ventana de 30 días. | 0 días | 1–2 días | ≥ 3 días |
+""")
+        st.markdown("""
+**Umbrales por cultivo**
+
+| Cultivo | Umbral calor C1 | Umbral frío C2 (Tmin) |
+|---------|----------------|----------------------|
+| Café | 32 °C | < 10 °C |
+| Cacao | 35 °C | < 16 °C |
+| Papa | 25 °C | < −2 °C |
+| Plátano | 38 °C | < 12 °C |
+| Aguacate | 35 °C | < 5 °C |
+| Maíz | 35 °C | < 5 °C |
+
+| Semáforo | C1 | C2 |
+|----------|----|-----|
+| 🟢 Verde | Sin acción | Sin acción |
+| 🟡 Amarillo | Registro y seguimiento | Alertar sobre riesgo de frío o helada |
+| 🔴 Rojo | Si NDVI también en alerta → escalar alerta global | Activar documentación seguro; proponer plan de pago diferido |
+""")
+
+    with st.expander("🦠 Bloque D · Riesgo Fitosanitario", expanded=True):
+        st.markdown("""
+**Fuente**: ERA5 + Open-Meteo Forecast API · Variables: temperatura media, humedad relativa, precipitación (según cultivo)
+
+**Metodología**: En lugar de umbrales absolutos de días favorables — que en Colombia tropical
+generan alertas permanentes porque las condiciones basales ya son favorables para hongos —
+se calcula la **anomalía respecto a la normal histórica** del mismo período del año.
+
+El semáforo se activa cuando el mes actual es *más favorable de lo habitual* para la enfermedad,
+no simplemente cuando hay condiciones favorables.
+
+**Cálculo de la normal**: media de días favorables para la enfermedad en la misma ventana de 30 días
+del calendario, sobre 5 años de ERA5 histórico.
+""")
+        st.markdown("""
+| Cultivo | Enfermedad | Condición favorable |
+|---------|-----------|---------------------|
+| **Café** | Roya (*Hemileia vastatrix*) | Tavg 22–27 °C **Y** rh > 80 % |
+| **Cacao** | Moniliophthora *roreri* | rh > 90 % **Y** Tavg 22–26 °C |
+| **Cacao** | *Phytophthora palmivora* | rh > 85 % **Y** Tavg 24–28 °C **Y** pr > 15 mm |
+| **Papa** | Gota (*Phytophthora infestans*) | Tavg 10–20 °C **Y** pr > 0 mm |
+| **Plátano** | Sigatoka negra | Tavg > 24 °C **Y** rh > 80 % |
+| **Maíz** | *Aspergillus flavus* | Tmax 30–37 °C **Y** rh > 80 % *(solo abril–junio)* |
+
+Para **Cacao**, el indicador registra días en que se cumplen las condiciones
+de cualquiera de las dos enfermedades (lógica OR).
+
+**Tabla de semáforo D1**
+
+| Semáforo | Criterio | Acción recomendada |
+|----------|----------|--------------------|
+| 🟢 Verde | ≤ normal + 3 días ó ≤ 115 % de la media | Sin acción. |
+| 🟡 Amarillo | Normal + 3 a + 7 días ó 115–140 % | Informar al agricultor; recomendar revisión del cultivo. |
+| 🔴 Rojo | > normal + 7 días ó > 140 % | Verificar pérdidas reportadas; activar protocolo de alivio si se documenta impacto. |
+""")
+
+    with st.expander("💨 Bloque E · Viento (cultivos susceptibles)", expanded=True):
+        st.markdown("""
+**Fuente**: ERA5 + Open-Meteo Forecast API · Variable: ráfaga máxima diaria a 10 m (`wind_gusts_10m_max`, km/h)
+
+El indicador solo se calcula para cultivos con riesgo estructural de daño mecánico por viento.
+Los umbrales fueron validados mediante backtesting de eventos de daño (Plátano) o estimados
+a partir de literatura agronómica (Aguacate, Maíz — pendientes de calibración con datos de siniestros).
+""")
+        st.markdown("""
+| Cultivo | Umbral | 🟢 Verde | 🟡 Amarillo | 🔴 Rojo |
+|---------|--------|----------|-------------|---------|
+| Plátano | > 65 km/h | 0 días / 30d | 1–4 días | ≥ 5 días |
+| Aguacate | > 54 km/h | 0 días / 30d | 1–4 días | ≥ 5 días |
+| Maíz | > 43 km/h | 0 días / 30d | 1–4 días | ≥ 5 días |
+
+| Semáforo | Acción recomendada |
+|----------|--------------------|
+| 🟢 Verde | Sin acción. |
+| 🟡 Amarillo | Contacto preventivo con el agricultor. |
+| 🔴 Rojo | Verificar daños físicos en el cultivo; activar documentación para seguro. |
+""")
+
+    with st.expander("🎯 Alerta Global · Monitoreo", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Metodología**
+
+La alerta global del predio es el peor semáforo entre
+los **dos componentes principales**:
+
+1. **Componente de Vegetación (Bloque A)**: peor entre A1 y A2
+2. **Componente Climático (Hoy)**: peor indicador entre B1, B2, B3, C1, C2, D1 y E1 en el horizonte actual
+
+```
+Alerta Global = max(Bloque A, Clima Hoy)
+```
+
+Esta lógica es conservadora: si cualquiera de los dos componentes
+detecta deterioro, la alerta global se activa.
+
+**Consolidación en el portafolio**
+
+La tabla de portafolio muestra la alerta global de cada predio,
+permitiendo priorizar la atención del equipo de gestión de cartera
+sin necesidad de revisar el detalle de cada predio individualmente.
+""")
+        with c2:
+            st.markdown("""
+**Tabla de decisión global**
+
+| Alerta | Criterio | Acción | Plazo |
+|--------|----------|--------|-------|
+| 🟢 **Normal** | Todos los indicadores en verde | Sin acción requerida. Mantener seguimiento periódico. | — |
+| 🟡 **Precaución** | ≥ 1 indicador en amarillo, ninguno en rojo | Contacto proactivo con el agricultor. Registrar en expediente. | 5 días hábiles |
+| 🔴 **Alerta Productiva** | ≥ 1 indicador climático o NDVI en rojo | Intervención inmediata. Solicitar fotos + visita técnica. Evaluar reestructuración del crédito. | < 48 horas |
+
+**Alineación con el sistema Pre-Crédito**
+
+Los indicadores de Monitoreo son metodológicamente consistentes
+con los de Validación Pre-Crédito (Tab 1):
+- Mismas variables climáticas (ERA5 / Open-Meteo)
+- Mismas condiciones agronómicas de enfermedad (matriz de vulnerabilidad)
+- La diferencia es el horizonte: Tab 1 evalúa riesgo estructural histórico (P80 anual),
+  Tab 2 detecta deterioro en tiempo real (ventanas de 14–30 días y pronóstico).
+""")
+
 #  TAB 1 · VALIDACIÓN PRE-CRÉDITO
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_validacion:
