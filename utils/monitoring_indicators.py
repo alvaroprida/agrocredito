@@ -20,16 +20,22 @@ _CROP_CFG: dict[str, dict] = {
         "tmin_cold": 10,
         "dry_days":  45,
         "wind_ms":   None,
-        "disease":   {"name": "Roya (Hemileia)", "type": "rh",
-                      "t_min": 16, "t_max": 24, "rh": 80},
+        "disease":   {"name": "Roya (Hemileia vastatrix)", "type": "rh",
+                      "t_min": 22, "t_max": 27, "rh": 80},
     },
     "Cacao": {
         "tmax_heat": 35,
         "tmin_cold": 16,
         "dry_days":  20,
         "wind_ms":   None,
-        "disease":   {"name": "Moniliasis", "type": "rh",
-                      "t_min": 18, "t_max": 28, "rh": 85},
+        "disease":   {
+            "name": "Moniliophthora / Phytophthora",
+            "type": "multi",
+            "conditions": [
+                {"t_min": 22, "t_max": 26, "rh": 90},            # Moniliophthora roreri
+                {"t_min": 24, "t_max": 28, "rh": 85, "pr": 15},  # Phytophthora palmivora
+            ],
+        },
     },
     "Papa": {
         "tmax_heat": 25,
@@ -59,7 +65,9 @@ _CROP_CFG: dict[str, dict] = {
         "tmin_cold": 5,
         "dry_days":  25,
         "wind_ms":   12.0,
-        "disease":   None,
+        "disease":   {"name": "Aspergillus flavus", "type": "heat_rh",
+                      "tmax_min": 30, "tmax_max": 37, "rh": 80,
+                      "months": [4, 5, 6]},
     },
 }
 _DEFAULT_CFG: dict = {
@@ -266,23 +274,52 @@ def _c2(df: pd.DataFrame, cultivo: str, end_date: date) -> dict:
 def _disease_mask(w: pd.DataFrame, disease: dict) -> pd.Series:
     """Devuelve máscara booleana de días con condiciones favorables para la enfermedad."""
     dtype = disease["type"]
+
+    # Filtro de meses si está definido (ej. Aspergillus sólo abr–jun)
+    month_ok = (
+        w["month"].isin(disease["months"])
+        if "months" in disease
+        else pd.Series(True, index=w.index)
+    )
+
     if dtype == "rh":
-        return (
+        return month_ok & (
             (w["tavg"].fillna(-999) >= disease["t_min"]) &
             (w["tavg"].fillna(-999) <= disease["t_max"]) &
             (w["rh_mean"].fillna(0)  > disease["rh"])
         )
     elif dtype == "rain":
-        return (
+        return month_ok & (
             (w["tavg"].fillna(-999) >= disease["t_min"]) &
             (w["tavg"].fillna(-999) <= disease["t_max"]) &
             (w["pr"].fillna(0)       > 0)
         )
     elif dtype == "tmin_tavg":
-        return (
+        return month_ok & (
             (w["tavg"].fillna(-999) > disease["t_min"]) &
             (w["rh_mean"].fillna(0) > disease["rh"])
         )
+    elif dtype == "heat_rh":
+        # Tmax en rango AND rh > umbral (ej. Aspergillus flavus en Maíz)
+        return month_ok & (
+            (w["tmax"].fillna(-999) >= disease["tmax_min"]) &
+            (w["tmax"].fillna(-999) <= disease["tmax_max"]) &
+            (w["rh_mean"].fillna(0)  > disease["rh"])
+        )
+    elif dtype == "multi":
+        # OR de múltiples condiciones (ej. Cacao: Moniliophthora OR Phytophthora)
+        combined = pd.Series(False, index=w.index)
+        for cond in disease["conditions"]:
+            sub = (
+                (w["tavg"].fillna(-999) >= cond["t_min"]) &
+                (w["tavg"].fillna(-999) <= cond["t_max"]) &
+                (w["rh_mean"].fillna(0)  > cond["rh"])
+            )
+            if "pr" in cond:
+                sub = sub & (w["pr"].fillna(0) > cond["pr"])
+            combined = combined | sub
+        return month_ok & combined
+
     return pd.Series(False, index=w.index)
 
 
