@@ -1162,7 +1162,7 @@ with tab_metodologia:
     _thr_p   = f"{_b2_m['peak_threshold']:.2f}"  if _b2_m else "0.45–0.60*"
     _ndvi_th = st.session_state.get("ndvi_threshold", 0.25)
 
-    st.subheader("📖 Metodología y Criterios de Evaluación")
+    st.subheader("📖 Validación Pre-Crédito")
     st.caption(
         "Fuentes de datos, hipótesis, umbrales y tablas de decisión para cada bloque de la validación. "
         "Los campos marcados con * varían según el cultivo seleccionado."
@@ -1538,7 +1538,7 @@ siguiente cálculo de riesgo para ese cultivo.
             st.warning(f"No se pudo cargar la matriz de vulnerabilidad: {_e_mx}")
 
     # ─── SCORE GLOBAL CONSOLIDADO PRE-CRÉDITO ────────────────────────────────
-    with st.expander("🎯 Score Global Consolidado · Validación Pre-Crédito", expanded=True):
+    with st.expander("🎯 E · Score Global Consolidado · Validación Pre-Crédito", expanded=True):
         st.markdown("""
 El score final consolida los resultados de todos los bloques en una única calificación de riesgo para la decisión de crédito.
 """)
@@ -1597,14 +1597,14 @@ proporcionalmente entre los bloques disponibles.
     # B · MONITOREO & FORECAST
     # ═══════════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.subheader("📡 B · Monitoreo & Forecast")
+    st.subheader("📡 Monitoreo & Forecast")
     st.caption(
         "Metodología del sistema de monitoreo continuo de predios durante la vida del crédito. "
         "Detecta señales tempranas de deterioro productivo para activar acciones preventivas "
         "antes de que el agricultor entre en mora."
     )
 
-    with st.expander("🏗️ Arquitectura y Fuentes de Datos", expanded=True):
+    with st.expander("🏗️ Arquitectura · Fuentes de Datos y Horizontes Temporales", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("""
@@ -1655,7 +1655,7 @@ porque no existe modelo de forecast satelital. Se calcula sobre la escena
 más reciente disponible, independientemente de su fecha.
 """)
 
-    with st.expander("🛰️ Bloque A · Vegetación NDVI", expanded=True):
+    with st.expander("🛰️ A · Vegetación NDVI", expanded=True):
         st.markdown("""
 **Fuente**: Sentinel-2 L2A armonizado · Google Earth Engine (GEE)
 **Filtro de nubes**: escenas con cobertura nubosa < 40 % dentro del predio
@@ -1682,7 +1682,7 @@ más reciente disponible, independientemente de su fecha.
 | 🔴 Rojo | Solicitar fotos de campo + visita técnica; activar documentación para seguro si corresponde. |
 """)
 
-    with st.expander("🌧️ Bloque B · Estrés Hídrico", expanded=True):
+    with st.expander("🌧️ B · Estrés Hídrico", expanded=True):
         st.markdown("""
 **Fuente**: ERA5 + Open-Meteo Forecast API · Variable: precipitación diaria (mm)
 """)
@@ -1707,7 +1707,7 @@ más reciente disponible, independientemente de su fecha.
 | 🔴 Rojo | Activar protocolo de alivio si hay pérdida verificable | Verificar disponibilidad de riego; evaluar extensión de plazo | Documentar evento para seguro; solicitar fotos de campo |
 """)
 
-    with st.expander("🌡️ Bloque C · Estrés Térmico", expanded=True):
+    with st.expander("🌡️ C · Estrés Térmico", expanded=True):
         st.markdown("""
 **Fuente**: ERA5 + Open-Meteo Forecast API · Variables: temperatura máxima y mínima diaria (°C)
 """)
@@ -1736,7 +1736,7 @@ más reciente disponible, independientemente de su fecha.
 | 🔴 Rojo | Si NDVI también en alerta → escalar alerta global | Activar documentación seguro; proponer plan de pago diferido |
 """)
 
-    with st.expander("🦠 Bloque D · Riesgo Fitosanitario", expanded=True):
+    with st.expander("🦠 D · Riesgo Fitosanitario", expanded=True):
         st.markdown("""
 **Fuente**: ERA5 + Open-Meteo Forecast API · Variables: temperatura media, humedad relativa, precipitación (según cultivo)
 
@@ -1772,7 +1772,7 @@ de cualquiera de las dos enfermedades (lógica OR).
 | 🔴 Rojo | > normal + 7 días ó > 140 % | Verificar pérdidas reportadas; activar protocolo de alivio si se documenta impacto. |
 """)
 
-    with st.expander("💨 Bloque E · Viento (cultivos susceptibles)", expanded=True):
+    with st.expander("💨 E · Viento (cultivos susceptibles)", expanded=True):
         st.markdown("""
 **Fuente**: ERA5 + Open-Meteo Forecast API · Variable: ráfaga máxima diaria a 10 m (`wind_gusts_10m_max`, km/h)
 
@@ -1794,7 +1794,7 @@ a partir de literatura agronómica (Aguacate, Maíz — pendientes de calibraci�
 | 🔴 Rojo | Verificar daños físicos en el cultivo; activar documentación para seguro. |
 """)
 
-    with st.expander("🎯 Alerta Global · Monitoreo", expanded=True):
+    with st.expander("🎯 F · Alerta Global · Monitoreo", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("""
