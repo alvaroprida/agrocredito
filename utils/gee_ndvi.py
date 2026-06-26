@@ -152,6 +152,67 @@ def _download_image(image: ee.Image, band: str, roi: ee.Geometry,
     return arr
 
 
+# ── B2 · Actividad Productiva (serie NDVI por escena) ─────────────────────────
+
+def get_productivity_analysis_gee(
+    gdf_predio:    gpd.GeoDataFrame,
+    cultivo:       str,
+    n_years:       int   = 3,
+    max_cloud_pct: float = 20.0,
+    res_m:         float = 10.0,
+) -> dict:
+    """
+    B2 · Actividad Productiva vía Google Earth Engine (Sentinel-2 SR Harmonized).
+
+    Calcula la mediana NDVI por escena sobre el predio durante n_years y aplica
+    el mismo scoring por cultivo que la versión anterior. Devuelve el mismo dict
+    de resultado que consume la app (clave por clave).
+    """
+    from utils.eosda_ndvi import score_b2   # scoring agnóstico a la fuente
+
+    _init_gee()
+
+    gdf4 = gdf_predio.to_crs("EPSG:4326")
+    roi  = ee.Geometry(gdf4.geometry.iloc[0].__geo_interface__)
+
+    end_dt   = datetime.utcnow()
+    start_dt = end_dt - timedelta(days=365 * n_years)
+
+    s2 = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(roi)
+        .filterDate(start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_pct))
+        .map(_mask_s2_clouds)
+        .map(lambda img: img.normalizedDifference(["B8", "B4"])
+                           .rename("NDVI")
+                           .copyProperties(img, ["system:time_start"]))
+    )
+
+    # Mediana NDVI por escena sobre el predio (una sola llamada getInfo)
+    def _scene_feature(img):
+        img = ee.Image(img)
+        val = img.reduceRegion(ee.Reducer.median(), roi, res_m, maxPixels=1e8).get("NDVI")
+        return ee.Feature(None, {"date": img.date().format("YYYY-MM-dd"), "median": val})
+
+    raw = ee.FeatureCollection(s2.map(_scene_feature)).getInfo()["features"]
+
+    stats = sorted(
+        [{"date": f["properties"]["date"], "median": float(f["properties"]["median"])}
+         for f in raw
+         if f["properties"].get("median") is not None
+         and not np.isnan(f["properties"]["median"])],
+        key=lambda x: x["date"],
+    )
+    if not stats:
+        raise RuntimeError(
+            "No se obtuvieron escenas Sentinel-2 válidas para el predio en este período. "
+            "Intente ampliar el período o aumentar el umbral de nubosidad."
+        )
+
+    return score_b2(stats, cultivo)
+
+
 # ── Main function ─────────────────────────────────────────────────────────────
 
 def get_ndvi_gee(

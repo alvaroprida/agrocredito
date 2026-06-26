@@ -57,8 +57,7 @@ from utils.risk_indicators  import (
     score_to_label, score_to_color, aggregate_risk_score,
 )
 from utils.eosda_terrain  import get_terrain_analysis
-from utils.gee_ndvi       import get_ndvi_gee
-from utils.eosda_ndvi     import get_productivity_analysis
+from utils.gee_ndvi       import get_ndvi_gee, get_productivity_analysis_gee
 from utils.risk_scoring   import (
     score_riesgo, INDICADORES, GRUPOS,
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
@@ -102,7 +101,7 @@ def _get_b2_cached(geojson_str: str, cultivo: str):
     import json
     from shapely.geometry import shape
     gdf = gpd.GeoDataFrame(geometry=[shape(json.loads(geojson_str))], crs="EPSG:4326")
-    return get_productivity_analysis(gdf, cultivo)
+    return get_productivity_analysis_gee(gdf, cultivo)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_monitoring_cached(lat: float, lon: float):
@@ -1233,7 +1232,7 @@ evitando el doble conteo de zonas que coinciden en múltiples capas.
             st.markdown(f"""
 **A2-A · Pendiente (DEM)**
 
-- Fuente: EOSDA API — DEM SRTM 30 m
+- Fuente: AWS Terrain Tiles (Terrarium) — DEM SRTM 30 m
 - Umbral configurable (default **25 %**)
 - Se excluyen los píxeles con pendiente superior al umbral
 
@@ -1322,7 +1321,7 @@ estructurales, lo que mejora la capacidad de repago del crédito.
         with c1:
             st.markdown(f"""
 **Fuente de datos**
-Sentinel-2 L2A · EOSDA Field Analytics API.
+Sentinel-2 SR · Google Earth Engine.
 Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro AOI, no por tile completo).
 Período: últimos **3 años**, 3 peticiones en paralelo de 1 año cada una.
 
@@ -1563,8 +1562,8 @@ proporcionalmente entre los bloques disponibles.
 | A1 · Zona Agrícola (Frontera) | UPRA / IGAC | 15 % |
 | A2 · Área Efectiva Cultivable | DEM · NDVI · Catastro | 10 % |
 | B1 · Aptitud al Cultivo | UPRA · datos.gov.co | 15 % |
-| B2 · Actividad Productiva NDVI | EOSDA · Sentinel-2 | 15 % |
-| B3 · Altitud vs. Cultivo | DEM EOSDA | 0 % *(informativo)* |
+| B2 · Actividad Productiva NDVI | GEE · Sentinel-2 | 15 % |
+| B3 · Altitud vs. Cultivo | DEM Terrarium | 0 % *(informativo)* |
 | C · Infraestructura / Acceso | OSM · OSRM | 15 % |
 | D · Riesgo Agroclimático | ERA5 · Open-Meteo · P80 | 15 % |
 | **Total** | | **100 %** |
@@ -1944,7 +1943,7 @@ with tab_validacion:
         _pr = st.session_state.get("predio")
         if _pr is None:
             return
-        st.markdown("#### 🏔️ A2-A · Análisis del Terreno (EOSDA API)")
+        st.markdown("#### 🏔️ A2-A · Análisis del Terreno (AWS Terrarium)")
         st.caption("Datos de pendiente utilizados en el cálculo del Área Efectiva.")
 
         _slope_thr = st.slider(
@@ -1967,7 +1966,7 @@ with tab_validacion:
 
         _t = st.session_state.get("terrain")
         if _t is None:
-            st.info("Pulsa **Calcular terreno** para descargar el DEM desde EOSDA API.")
+            st.info("Pulsa **Calcular terreno** para descargar el DEM desde AWS Terrain Tiles (Terrarium).")
         else:
             _s    = _t["stats"]
             _maps = _t["maps"]
@@ -2437,7 +2436,7 @@ with tab_validacion:
 
     with st.expander("📊 B2 · Actividad Productiva (NDVI)", expanded=True):
         st.caption(
-            "Sentinel-2 vía EOSDA Statistics API · Últimos 3 años · "
+            "Sentinel-2 vía Google Earth Engine · Últimos 3 años · "
             "Confirma que el predio ha tenido actividad vegetativa activa"
         )
 
@@ -2461,7 +2460,7 @@ with tab_validacion:
         )
         if st.button("🔄 Calcular actividad productiva (NDVI)", type="primary", key="btn_b2"):
             st.session_state["b2_result"] = None
-            with st.spinner("Descargando serie NDVI histórica (EOSDA · 3 años)…"):
+            with st.spinner("Descargando serie NDVI histórica (GEE · 3 años)…"):
                 try:
                     st.session_state["b2_result"] = _get_b2_cached(_geo, cultivo)
                 except Exception as _e:
@@ -3131,8 +3130,8 @@ with tab_validacion:
         ("A1", "Zona Agrícola · Frontera",    "PostGIS / IGAC",          _sem_a2, _res_a2),
         ("A2", "Área Efectiva Cultivable",    "DEM · NDVI · Catastro",   _sem_a3, _res_a3),
         ("B1", "Aptitud al Cultivo",          "UPRA · datos.gov.co",     _sem_b1, _res_b1),
-        ("B2", "Actividad Productiva NDVI",   "EOSDA · Sentinel-2",      _sem_b2, _res_b2),
-        ("B3", "Altitud vs. Cultivo",         "DEM EOSDA · Ref. UPRA",   _sem_b3, _res_b3),
+        ("B2", "Actividad Productiva NDVI",   "GEE · Sentinel-2",        _sem_b2, _res_b2),
+        ("B3", "Altitud vs. Cultivo",         "DEM Terrarium · Ref. UPRA", _sem_b3, _res_b3),
         ("C",  "Infraestructura / Acceso",    "OSM · OSRM",              _sem_c,  _res_c),
         ("D",  "Riesgo Agroclimático",        "ERA5 · Open-Meteo · P80", _sem_d,  _res_d),
     ]

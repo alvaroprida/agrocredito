@@ -428,6 +428,47 @@ def _semaforo_b2(pct_active: float, years_with_peak: int, n_years: int):
     return worst, s_pct, s_peak
 
 
+def score_b2(stats: list, cultivo: str) -> dict:
+    """
+    Scoring B2 · Actividad Productiva a partir de una serie de escenas NDVI.
+
+    `stats` es una lista ordenada de dicts {"date": "YYYY-MM-DD", "median": float}.
+    Agnóstica a la fuente de datos (GEE o cualquier otra). Devuelve el dict de
+    resultado completo que consume la app.
+    """
+    scene_thr, peak_thr = _crop_thresholds(cultivo)
+
+    medianas   = [s["median"] for s in stats]
+    pct_active = sum(1 for m in medianas if m >= scene_thr) / max(len(medianas), 1) * 100
+
+    peak_by_year: dict = {}
+    for s in stats:
+        try:
+            yr = int(s["date"][:4])
+        except (ValueError, TypeError):
+            continue
+        peak_by_year[yr] = max(peak_by_year.get(yr, -1.0), s["median"])
+
+    n_yrs           = len(peak_by_year)
+    years_with_peak = sum(1 for v in peak_by_year.values() if v >= peak_thr)
+    semaforo, s_pct, s_peak = _semaforo_b2(pct_active, years_with_peak, max(n_yrs, 1))
+
+    return {
+        "stats":           stats,
+        "pct_active":      round(pct_active, 1),
+        "peak_by_year":    peak_by_year,
+        "years_with_peak": years_with_peak,
+        "n_years":         n_yrs,
+        "overall_median":  round(float(np.median(medianas)), 3) if medianas else None,
+        "scene_threshold": scene_thr,
+        "peak_threshold":  peak_thr,
+        "semaforo":        semaforo,
+        "semaforo_pct":    s_pct,
+        "semaforo_peak":   s_peak,
+        "decision":        _DECISIONS_B2[semaforo],
+    }
+
+
 def get_productivity_analysis(
     gdf_predio:  gpd.GeoDataFrame,
     cultivo:     str,
@@ -474,37 +515,7 @@ def get_productivity_analysis(
             "No se obtuvieron escenas válidas de EOSDA Field Analytics para el predio."
         )
 
-    scene_thr, peak_thr = _crop_thresholds(cultivo)
-
-    medianas   = [s["median"] for s in stats]
-    pct_active = sum(1 for m in medianas if m >= scene_thr) / max(len(medianas), 1) * 100
-
-    peak_by_year: dict = {}
-    for s in stats:
-        try:
-            yr = int(s["date"][:4])
-        except (ValueError, TypeError):
-            continue
-        peak_by_year[yr] = max(peak_by_year.get(yr, -1.0), s["median"])
-
-    n_yrs           = len(peak_by_year)
-    years_with_peak = sum(1 for v in peak_by_year.values() if v >= peak_thr)
-    semaforo, s_pct, s_peak = _semaforo_b2(pct_active, years_with_peak, max(n_yrs, 1))
-
-    return {
-        "stats":           stats,
-        "pct_active":      round(pct_active, 1),
-        "peak_by_year":    peak_by_year,
-        "years_with_peak": years_with_peak,
-        "n_years":         n_yrs,
-        "overall_median":  round(float(np.median(medianas)), 3) if medianas else None,
-        "scene_threshold": scene_thr,
-        "peak_threshold":  peak_thr,
-        "semaforo":        semaforo,
-        "semaforo_pct":    s_pct,
-        "semaforo_peak":   s_peak,
-        "decision":        _DECISIONS_B2[semaforo],
-    }
+    return score_b2(stats, cultivo)
 
 
 # ── Función principal ─────────────────────────────────────────────────────────

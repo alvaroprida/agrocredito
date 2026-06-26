@@ -10,7 +10,7 @@ Plataforma Streamlit de evaluación agroclimática y productiva para decisiones 
 app.py                      # Front-end principal Streamlit
 utils/
   postgis_client.py         # Consulta PostGIS (modo simulado por defecto)
-  eosda_terrain.py          # Análisis de terreno DEM via EOSDA API
+  eosda_terrain.py          # Análisis de terreno DEM via AWS Terrain Tiles (Terrarium, sin API key)
   risk_scoring.py           # Scoring 15 indicadores de riesgo (MVP hardcoded)
   report_generator.py       # Generación PDF ejecutivo (reportlab)
 requirements.txt
@@ -98,9 +98,9 @@ CASOS_ESTUDIO = {
 | 6 | T_máx media anual | ERA5 · Open-Meteo | ✅ | ✅ Calculado desde series |
 | 7 | Días T_mín < umbral | ERA5 · Open-Meteo | ✅ | ✅ Calculado desde series |
 | 8 | Días viento > umbral | ERA5 · Open-Meteo | ✅ | ⏳ Hardcoded |
-| 9 | NDVI anomalía | Sentinel-2 · EOSDA/GEE | ✅ | ✅ Desde ndvi_promedio_3a |
-| 10 | NDMI estrés hídrico | Sentinel-2 · EOSDA/GEE | ✅ | ⏳ Hardcoded |
-| 11 | NDRE clorosis | Sentinel-2 · EOSDA/GEE | ✅ | ⏳ Hardcoded |
+| 9 | NDVI anomalía | Sentinel-2 · GEE | ✅ | ✅ Desde ndvi_promedio_3a |
+| 10 | NDMI estrés hídrico | Sentinel-2 · GEE | ✅ | ⏳ Hardcoded |
+| 11 | NDRE clorosis | Sentinel-2 · GEE | ✅ | ⏳ Hardcoded |
 | 12 | VH backscatter SAR | Sentinel-1 · GEE | ✅ | ⏳ Hardcoded |
 | 13 | Valor Potencial Suelo | UPRA / SIPRA | ❌ | ⏳ Hardcoded |
 | 14 | Aptitud agroclimática | UPRA / SIPRA | ❌ | ⏳ Hardcoded |
@@ -154,6 +154,9 @@ reportlab>=4.0
 
 ## utils/eosda_terrain.py — Análisis de terreno
 
+> Fuente DEM: **AWS Terrain Tiles (Terrarium)** — SRTM ~30 m, global, **sin API key**.
+> (Antes usaba el endpoint EOSDA `render/terrain`, retirado.)
+
 ### Función principal
 ```python
 from utils.eosda_terrain import get_terrain_analysis, build_terrain_maps
@@ -172,7 +175,7 @@ terrain["no_cultivable_mask"] # np.ndarray bool
 ```
 
 ### Requiere
-- `EOSDA_API_KEY` en Streamlit secrets o variable de entorno
+- Sin API key (Terrarium es público)
 - `gdf_predio` en EPSG:4326 (viene de `postgis_client.get_predio_por_punto`)
 
 ---
@@ -197,8 +200,12 @@ SCORE_LABEL = {0: "🟢 Bajo", 1: "🟡 Medio", 2: "🔴 Alto"}
 
 ```toml
 DATABASE_URL   = "postgresql://..."   # PostGIS (opcional, USE_REAL_DB=False por defecto)
-EOSDA_API_KEY  = "..."                # Para análisis de terreno real
+
+[gee]                                 # Google Earth Engine — NDVI (A2-C) y Actividad Productiva (B2)
+service_account_json = "..."          # JSON de la service account
 ```
+
+> El análisis de terreno (DEM) ya **no requiere** `EOSDA_API_KEY`: usa AWS Terrain Tiles (Terrarium), público.
 
 ---
 
