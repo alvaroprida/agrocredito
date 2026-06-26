@@ -30,12 +30,17 @@ import matplotlib.colors as mcolors
 warnings.filterwarnings("ignore")
 
 ZOOM     = 14
-BASE_URL = "https://api-connect.eos.com/api/render/terrain"
+# Fuente DEM: AWS Terrain Tiles (Terrarium · SRTM ~30 m, global, sin API key).
+# Reemplaza el antiguo endpoint EOSDA render/terrain (requería key y dejó de
+# responder en Cloud). Codificación Terrarium: elev = (R*256 + G + B/256) - 32768.
+BASE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium"
 
 
 # ── API Key ───────────────────────────────────────────────────────────────────
 
 def _get_api_key() -> str:
+    """Conservada por compatibilidad. La fuente DEM actual (Terrarium) no
+    requiere API key; esta función ya no se usa en el flujo de terreno."""
     try:
         import streamlit as st
         return st.secrets["EOSDA_API_KEY"]
@@ -66,36 +71,38 @@ def _get_tiles(minx, miny, maxx, maxy, zoom):
     x_max, y_max = _deg2tile(miny, maxx, zoom)
     return [(x, y, zoom) for x in range(x_min, x_max + 1) for y in range(y_min, y_max + 1)]
 
-def _download_tile(x, y, z, tmp_dir, api_key):
-    url = f"{BASE_URL}/{z}/{x}/{y}?api_key={api_key}&format=geotiff"
+def _decode_terrarium(png_bytes: bytes) -> np.ndarray:
+    """Decodifica un tile Terrarium (PNG RGB) a un array de elevación (m)."""
+    rgb  = np.asarray(Image.open(BytesIO(png_bytes)).convert("RGB"), dtype="float64")
+    elev = (rgb[:, :, 0] * 256.0 + rgb[:, :, 1] + rgb[:, :, 2] / 256.0) - 32768.0
+    return elev.astype("float32")
+
+def _download_tile(x, y, z, tmp_dir, api_key=None):
+    url  = f"{BASE_URL}/{z}/{x}/{y}.png"
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
 
-    tile_path = Path(tmp_dir) / f"tile_{z}_{x}_{y}.tif"
-    tile_path.write_bytes(resp.content)
+    elev = _decode_terrarium(resp.content)          # (H, W) float32
+    h, w = elev.shape
 
-    bbox = _tile2bbox(x, y, z)
-    with rasterio.open(tile_path) as src:
-        data    = src.read()
-        profile = src.profile.copy()
-
-    profile.update({
-        "crs": "EPSG:3857",
-        "transform": from_bounds(
-            *rasterio.warp.transform_bounds("EPSG:4326", "EPSG:3857", *bbox),
-            width=data.shape[-1], height=data.shape[-2],
-        ),
-        "driver": "GTiff",
-    })
+    bbox     = _tile2bbox(x, y, z)
+    transform = from_bounds(
+        *rasterio.warp.transform_bounds("EPSG:4326", "EPSG:3857", *bbox),
+        width=w, height=h,
+    )
+    profile = {
+        "driver": "GTiff", "dtype": "float32", "count": 1,
+        "height": h, "width": w, "crs": "EPSG:3857", "transform": transform,
+    }
     georef_path = Path(tmp_dir) / f"georef_{z}_{x}_{y}.tif"
     with rasterio.open(georef_path, "w", **profile) as dst:
-        dst.write(data)
+        dst.write(elev, 1)
     return georef_path
 
 
 # ── Descarga DEM con buffer ───────────────────────────────────────────────────
 
-def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key: str, buffer_m: float = 50.0):
+def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key=None, buffer_m: float = 50.0):
     """
     Descarga el DEM con un buffer exterior para evitar artefactos en bordes.
     Devuelve:
@@ -119,15 +126,21 @@ def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key: str, buffer_m: float = 
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tile_paths = []
+        errores    = []
         for x, y, z in tiles:
             try:
                 p = _download_tile(x, y, z, tmp_dir, api_key)
                 tile_paths.append(p)
-            except Exception:
+            except Exception as e:
+                errores.append(f"tile {z}/{x}/{y}: {type(e).__name__}: {e}")
                 continue
 
         if not tile_paths:
-            raise RuntimeError("No se pudo descargar ningún tile del DEM.")
+            detalle = " | ".join(errores[:3]) if errores else "sin detalle"
+            raise RuntimeError(
+                f"No se pudo descargar ningún tile del DEM ({len(tiles)} intentados). "
+                f"Causa: {detalle}"
+            )
 
         datasets = [rasterio.open(p) for p in tile_paths]
         mosaic, mosaic_transform = merge(datasets)
@@ -329,12 +342,9 @@ def get_terrain_analysis(gdf_predio: gpd.GeoDataFrame,
     artefactos en los bordes del polígono (resolución ~30m).
     Retorna dict con arrays, estadísticas y mapas Folium.
     """
-    api_key = _get_api_key()
-    if not api_key:
-        raise ValueError("EOSDA_API_KEY no configurada en secrets.")
-
+    # La fuente DEM (Terrarium) es pública y no requiere API key.
     dem_buf, mask_orig, transform, crs, bounds_wgs84, bounds_wgs84_orig = \
-        _download_dem(gdf_predio, api_key, buffer_m=50.0)
+        _download_dem(gdf_predio, api_key=None, buffer_m=50.0)
 
     # Calcular sobre DEM con buffer → bordes correctos
     slope_buf  = _calc_slope(dem_buf, transform, crs)
