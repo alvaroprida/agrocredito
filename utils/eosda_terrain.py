@@ -1,6 +1,6 @@
 """
 utils/eosda_terrain.py
-Descarga y análisis de terreno a partir de la API EOSDA Terrain.
+Descarga y análisis de terreno a partir de AWS Terrain Tiles (Terrarium).
 Visualizaciones en Folium como overlays sobre imagen satelital.
 
 Funciones principales:
@@ -31,22 +31,8 @@ warnings.filterwarnings("ignore")
 
 ZOOM     = 14
 # Fuente DEM: AWS Terrain Tiles (Terrarium · SRTM ~30 m, global, sin API key).
-# Reemplaza el antiguo endpoint EOSDA render/terrain (requería key y dejó de
-# responder en Cloud). Codificación Terrarium: elev = (R*256 + G + B/256) - 32768.
+# Codificación Terrarium: elev = (R*256 + G + B/256) - 32768.
 BASE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium"
-
-
-# ── API Key ───────────────────────────────────────────────────────────────────
-
-def _get_api_key() -> str:
-    """Conservada por compatibilidad. La fuente DEM actual (Terrarium) no
-    requiere API key; esta función ya no se usa en el flujo de terreno."""
-    try:
-        import streamlit as st
-        return st.secrets["EOSDA_API_KEY"]
-    except Exception:
-        import os
-        return os.environ.get("EOSDA_API_KEY", "")
 
 
 # ── Helpers tiles ─────────────────────────────────────────────────────────────
@@ -77,7 +63,7 @@ def _decode_terrarium(png_bytes: bytes) -> np.ndarray:
     elev = (rgb[:, :, 0] * 256.0 + rgb[:, :, 1] + rgb[:, :, 2] / 256.0) - 32768.0
     return elev.astype("float32")
 
-def _download_tile(x, y, z, tmp_dir, api_key=None):
+def _download_tile(x, y, z, tmp_dir):
     url  = f"{BASE_URL}/{z}/{x}/{y}.png"
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
@@ -102,7 +88,7 @@ def _download_tile(x, y, z, tmp_dir, api_key=None):
 
 # ── Descarga DEM con buffer ───────────────────────────────────────────────────
 
-def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key=None, buffer_m: float = 50.0):
+def _download_dem(gdf_predio: gpd.GeoDataFrame, buffer_m: float = 50.0):
     """
     Descarga el DEM con un buffer exterior para evitar artefactos en bordes.
     Devuelve:
@@ -129,7 +115,7 @@ def _download_dem(gdf_predio: gpd.GeoDataFrame, api_key=None, buffer_m: float = 
         errores    = []
         for x, y, z in tiles:
             try:
-                p = _download_tile(x, y, z, tmp_dir, api_key)
+                p = _download_tile(x, y, z, tmp_dir)
                 tile_paths.append(p)
             except Exception as e:
                 errores.append(f"tile {z}/{x}/{y}: {type(e).__name__}: {e}")
@@ -344,7 +330,7 @@ def get_terrain_analysis(gdf_predio: gpd.GeoDataFrame,
     """
     # La fuente DEM (Terrarium) es pública y no requiere API key.
     dem_buf, mask_orig, transform, crs, bounds_wgs84, bounds_wgs84_orig = \
-        _download_dem(gdf_predio, api_key=None, buffer_m=50.0)
+        _download_dem(gdf_predio, buffer_m=50.0)
 
     # Calcular sobre DEM con buffer → bordes correctos
     slope_buf  = _calc_slope(dem_buf, transform, crs)

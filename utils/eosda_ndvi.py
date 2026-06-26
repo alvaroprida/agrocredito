@@ -23,7 +23,7 @@ import numpy as np
 import requests
 import geopandas as gpd
 from PIL import Image
-import matplotlib.cm as cm
+import matplotlib
 import matplotlib.colors as mcolors
 
 warnings.filterwarnings("ignore")
@@ -197,7 +197,7 @@ def _build_ndvi_array(stats: list, shape: tuple = (64, 64),
 
 def _ndvi_to_png_b64(arr: np.ndarray, alpha: float = 0.70) -> str:
     norm   = mcolors.Normalize(vmin=-0.1, vmax=0.8)
-    mapper = cm.get_cmap("RdYlGn")
+    mapper = matplotlib.colormaps["RdYlGn"]
     rgba   = mapper(norm(arr))
     nan_m  = np.isnan(arr)
     rgba[nan_m, 3]  = 0.0

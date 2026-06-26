@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 import rasterio
 from PIL import Image
-import matplotlib.cm as cm
+import matplotlib
 import matplotlib.colors as mcolors
 import folium
 from folium.plugins import Fullscreen
@@ -73,7 +73,7 @@ def _mask_s2_clouds(image):
 
 def _ndvi_png(arr: np.ndarray, alpha: float = 0.80) -> str:
     norm  = mcolors.Normalize(vmin=-0.1, vmax=0.8, clip=True)
-    rgba  = cm.get_cmap("RdYlGn")(norm(arr))
+    rgba  = matplotlib.colormaps["RdYlGn"](norm(arr))
     nan_m = np.isnan(arr)
     rgba[nan_m,  3] = 0.0
     rgba[~nan_m, 3] = alpha
