@@ -581,28 +581,111 @@ def _colored_mask_png(mask_arr, r, g, b, alpha=0.55):
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
-def _rasterize_gdf_to_mask(gdf, bounds_wgs84, shape):
-    """Rasterizes a GeoDataFrame to a boolean mask grid aligned to bounds_wgs84."""
+def _polygonize_mask(mask, bounds_wgs84, src_crs="EPSG:4326"):
+    """Poligoniza una máscara booleana → GeoDataFrame con la unión de las
+    celdas True.
+
+    `bounds_wgs84` (minx,miny,maxx,maxy) delimitan el array en WGS84.
+    `src_crs` es el CRS real del grid de píxeles; las geometrías se devuelven
+    en ese CRS (p.ej. el grid de terreno está en EPSG:3857, no en 4326)."""
     try:
         import rasterio.features
+        import rasterio.warp
         from rasterio.transform import from_bounds
-        minx, miny, maxx, maxy = bounds_wgs84
-        h, w = shape
+        from shapely.geometry import shape as _shape
+        from shapely.ops import unary_union
+
+        mask = np.asarray(mask, dtype=bool)
+        if not mask.any() or bounds_wgs84 is None:
+            return gpd.GeoDataFrame(geometry=[], crs=src_crs)
+
+        h, w = mask.shape
+        if str(src_crs).upper() != "EPSG:4326":
+            minx, miny, maxx, maxy = rasterio.warp.transform_bounds(
+                "EPSG:4326", src_crs, *bounds_wgs84)
+        else:
+            minx, miny, maxx, maxy = bounds_wgs84
         transform = from_bounds(minx, miny, maxx, maxy, w, h)
-        gdf_4326 = gdf.to_crs("EPSG:4326")
-        shapes_iter = [
-            (geom.__geo_interface__, 1)
-            for geom in gdf_4326.geometry
-            if geom is not None and not geom.is_empty
+
+        geoms = [
+            _shape(geo)
+            for geo, val in rasterio.features.shapes(
+                mask.astype(np.uint8), mask=mask, transform=transform)
+            if val == 1
         ]
-        if not shapes_iter:
-            return np.zeros(shape, dtype=bool)
-        burned = rasterio.features.rasterize(
-            shapes_iter, out_shape=shape, transform=transform, dtype=np.uint8
-        )
-        return burned > 0
+        if not geoms:
+            return gpd.GeoDataFrame(geometry=[], crs=src_crs)
+        return gpd.GeoDataFrame(geometry=[unary_union(geoms)], crs=src_crs)
     except Exception:
-        return np.zeros(shape, dtype=bool)
+        return gpd.GeoDataFrame(geometry=[], crs=src_crs)
+
+
+def _compute_area_efectiva(predio_gdf, area_total, terrain, ndvi_res, gdf_const):
+    """Área efectiva cultivable = area_total − área(unión de zonas no cultivables).
+
+    Poligoniza pendiente>umbral (terreno), NDVI<umbral y construcciones, recorta
+    cada capa al polígono del predio en un CRS métrico común y las une (la unión
+    evita el doble conteo de solapamientos). Las áreas por componente se escalan
+    al área catastral mediante el ratio respecto al predio proyectado, de modo
+    que la distorsión de la proyección se cancela."""
+    from shapely.ops import unary_union
+
+    METRIC   = "EPSG:3857"
+    predio_m = predio_gdf.to_crs(METRIC)
+    predio_g = predio_m.geometry.iloc[0]
+    predio_a = predio_g.area
+
+    def _clip(gdf):
+        if gdf is None or len(gdf) == 0:
+            return None
+        try:
+            g = unary_union(gdf.to_crs(METRIC).geometry.values.tolist())
+            g = g.intersection(predio_g)
+            return None if g.is_empty else g
+        except Exception:
+            return None
+
+    def _ha(geom):
+        return area_total * (geom.area / predio_a) if (geom is not None and predio_a > 0) else 0.0
+
+    layers, names = {}, []
+
+    if terrain is not None and terrain.get("no_cultivable_mask") is not None:
+        g = _clip(_polygonize_mask(terrain["no_cultivable_mask"],
+                                   terrain.get("bounds_wgs84"), src_crs="EPSG:3857"))
+        if g is not None:
+            layers["pendiente"] = g; names.append("pendiente")
+
+    if ndvi_res is not None and ndvi_res.get("low_ndvi_mask") is not None:
+        g = _clip(_polygonize_mask(ndvi_res["low_ndvi_mask"],
+                                   ndvi_res.get("bounds_wgs84"), src_crs="EPSG:4326"))
+        if g is not None:
+            layers["ndvi"] = g; names.append("NDVI")
+
+    g = _clip(gdf_const)
+    if g is not None:
+        layers["const"] = g; names.append("construcciones")
+
+    area_pend  = _ha(layers.get("pendiente"))
+    area_ndvi  = _ha(layers.get("ndvi"))
+    area_const = _ha(layers.get("const"))
+
+    area_excluida = _ha(unary_union(list(layers.values()))) if layers else 0.0
+
+    area_ef = round(max(area_total - area_excluida, 0.0), 2)
+    pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+    metodo  = ("exacto · unión vectorial (" + " + ".join(names) + ")"
+               if names else "sin capas no cultivables calculadas")
+
+    return {
+        "area_pend":     area_pend,
+        "area_ndvi":     area_ndvi,
+        "area_const":    area_const,
+        "area_excluida": round(area_excluida, 3),
+        "area_ef":       area_ef,
+        "pct_ef":        pct_ef,
+        "metodo":        metodo,
+    }
 
 def mapa_predio_simple(lat, lon, predio):
     m = _base_map(predio["gdf"])
@@ -2161,8 +2244,6 @@ with tab_validacion:
 
     @st.fragment
     def _area_ef_fragment():
-        from PIL import Image as _Im
-
         _pr       = st.session_state.get("predio")
         _d        = st.session_state.get("datos", list(CASOS_ESTUDIO.values())[0])
         if _pr is None:
@@ -2197,60 +2278,34 @@ with tab_validacion:
         with c4: ver_const_a1  = st.checkbox("🟠 Construcciones",    value=True, key="a1_const")
 
         area_total = _pr.get("area_ha", _d["area_total_ha"])
-        area_pend  = st.session_state.get("area_pendiente_excluida_ha", _d["area_pendiente_excluida_ha"])
-        area_ndvi  = st.session_state.get("area_ndvi_bajo_ha",          0.0)
-        area_const = st.session_state.get("area_construcciones_ha",     _d["area_construcciones_ha"])
-        _slope_pct = st.session_state.get("slope_threshold",  25)
-        _ndvi_thr  = st.session_state.get("ndvi_threshold",   0.25)
+        # Umbrales tomados del RESULTADO calculado (no del slider vivo) para que
+        # la etiqueta coincida siempre con la máscara realmente usada. Si el
+        # usuario mueve el slider sin recalcular, el resultado refleja el último
+        # cálculo, no el valor pendiente del slider.
+        _slope_pct = (_terrain.get("slope_threshold")
+                      if _terrain else st.session_state.get("slope_threshold", 25))
+        _ndvi_thr  = (_ndvi_res.get("ndvi_threshold")
+                      if _ndvi_res else st.session_state.get("ndvi_threshold", 0.25))
         _gdf_const = st.session_state.get("gdf_construcciones")
-        _s_mask    = _terrain.get("no_cultivable_mask") if _terrain  else None
         _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
         _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
-        # ── Union of non-cultivable masks (pixel-level, avoids double-counting) ──
-        # When NDVI mask is available, ALL components are recomputed on the SAME
-        # NDVI 10m grid so that area_pend + area_ndvi + area_const - solapamiento
-        # = area_excluida exactly (no spurious overlap from mismatched grids).
-        if _n_mask is not None:
-            _pmask   = ~np.isnan(_ndvi_res["ndvi_p25"])
-            h, w     = _n_mask.shape
-            n_predio = max(int(_pmask.sum()), 1)
-
-            # NDVI component on NDVI grid
-            area_ndvi = float((_n_mask & _pmask).sum() / n_predio * area_total)
-
-            _union = _n_mask.copy()
-            if _s_mask is not None:
-                _sr       = np.array(_Im.fromarray(_s_mask.astype(np.uint8))
-                                       .resize((w, h), _Im.NEAREST)).astype(bool)
-                # Slope component on NDVI grid
-                area_pend = float((_sr & _pmask).sum() / n_predio * area_total)
-                _union    = _union | _sr
-
-            _ndvi_bounds = _ndvi_res.get("bounds_wgs84")
-            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                _b_mask    = _rasterize_gdf_to_mask(_gdf_const, _ndvi_bounds, (h, w))
-                # Buildings component on NDVI grid
-                area_const = float((_b_mask & _pmask).sum() / n_predio * area_total)
-                _union     = _union | _b_mask
-
-            layers = (["pendiente", "NDVI"] if _s_mask is not None else ["NDVI"])
-            if _gdf_const is not None and len(_gdf_const) > 0 and _ndvi_bounds:
-                layers.append("construcciones")
-            metodo = "exacto (unión " + " + ".join(layers) + ", grid 10 m)"
-
-            n_excluido    = int((_union & _pmask).sum())
-            area_excluida = float(n_excluido / n_predio * area_total)
-
-        elif _s_mask is not None:
-            area_excluida = area_pend + area_const
-            metodo        = "parcial (solo pendiente + construcciones; calcula NDVI para resultado exacto)"
-        else:
-            area_excluida = area_pend + area_ndvi + area_const
-            metodo        = "aproximado (calcula A2-A y A2-C para resultado exacto)"
-
-        area_ef = round(max(area_total - area_excluida, 0), 2)
-        pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+        # ── Área no cultivable: enfoque vectorial robusto ──────────────
+        # Poligonizamos cada raster en su propio grid/CRS (pendiente en 3857,
+        # NDVI en 4326), reproyectamos a un CRS métrico común, recortamos al
+        # predio y unimos las geometrías. area_ef = area_total − área(unión).
+        # Esto evita el desajuste de grids del método anterior (la máscara de
+        # pendiente tiene buffer y otra resolución/CRS que el grid NDVI).
+        _ef = _compute_area_efectiva(
+            _pr["gdf"], area_total, _terrain, _ndvi_res, _gdf_const,
+        )
+        area_pend     = _ef["area_pend"]
+        area_ndvi     = _ef["area_ndvi"]
+        area_const    = _ef["area_const"]
+        area_excluida = _ef["area_excluida"]
+        area_ef       = _ef["area_ef"]
+        pct_ef        = _ef["pct_ef"]
+        metodo        = _ef["metodo"]
 
         # ── Map ───────────────────────────────────────────────────────
         m_a1 = _base_map(_pr["gdf"])
