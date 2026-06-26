@@ -4,7 +4,7 @@ utils/monitoring_indicators.py
 Calcula indicadores de monitoreo (Bloques B–E) sobre la serie climática combinada.
 Cada indicador se evalúa en 3 horizontes temporales: Hoy, +7 días, +14 días.
 
-Bloque A (NDVI) se calcula externamente desde EOSDA y se adjunta aparte.
+Bloque A (NDVI) se calcula externamente desde Google Earth Engine y se adjunta aparte.
 """
 
 from __future__ import annotations

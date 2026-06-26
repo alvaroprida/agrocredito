@@ -385,7 +385,7 @@ def _build_pdf(
         ("B1", "Aptitud al Cultivo",         "UPRA · datos.gov.co",
          b1_nivel,
          f"{apt_cat} (score {apt_score:.2f})" if apt_cat else "—"),
-        ("B2", "Actividad Productiva NDVI",  "EOSDA · Sentinel-2",
+        ("B2", "Actividad Productiva NDVI",  "GEE · Sentinel-2",
          b2_nivel,
          f"{b2_pct:.0f}% escenas activas · {b2_peak}/{b2_nyears} años con pico"
          if b2 else "—"),
@@ -751,7 +751,7 @@ def _build_pdf(
         "catastrales y climáticos de acceso público. No constituye dictamen definitivo. "
         "El analista de crédito deberá validar cualquier condición condicional o negativa "
         "mediante visita en campo o documentación adicional. "
-        f"Fuentes: Sentinel-2 L2A (Element84 / EOSDA), ERA5 (Open-Meteo), IGAC, UPRA (datos.gov.co), OSM.",
+        f"Fuentes: Sentinel-2 SR (Google Earth Engine), DEM SRTM (AWS Terrarium), ERA5 (Open-Meteo), IGAC, UPRA (datos.gov.co), OSM.",
         "small",
     ))
 

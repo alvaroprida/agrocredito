@@ -1317,7 +1317,7 @@ evitando el doble conteo de zonas que coinciden en múltiples capas.
             st.markdown(f"""
 **A2-C · NDVI histórico (Sentinel-2)**
 
-- Fuente: Sentinel-2 L2A COG · Element84 Earth Search (sin API key)
+- Fuente: Sentinel-2 SR Harmonized · **Google Earth Engine (GEE)**
 - Período: últimos **3 años**; filtro nubosidad SCL < 20 % dentro del predio
 - Estadístico: **P25 por píxel** — percentil 25 de todas las escenas válidas
 - Umbral actual: P25 ≥ **{_ndvi_th:.2f}** → productivo
@@ -1393,9 +1393,9 @@ estructurales, lo que mejora la capacidad de repago del crédito.
         with c1:
             st.markdown(f"""
 **Fuente de datos**
-Sentinel-2 SR · Google Earth Engine.
+Sentinel-2 SR Harmonized · **Google Earth Engine (GEE)**.
 Solo se usan escenas con nubosidad **< 20 % dentro del predio** (filtro AOI, no por tile completo).
-Período: últimos **3 años**, 3 peticiones en paralelo de 1 año cada una.
+Período: últimos **3 años**; serie de mediana NDVI por escena calculada server-side en GEE.
 
 **Hipótesis**
 Un predio productivo activo debería mostrar de forma recurrente valores
@@ -2153,8 +2153,8 @@ with tab_validacion:
             return
         st.markdown("#### 🛰️ A2-C · Análisis de Actividad Productiva (NDVI)")
         st.caption(
-            "Sentinel-2 L2A COG · P25 real por píxel · 3 años de historia · "
-            "Filtro de nubosidad por SCL dentro del predio"
+            "Sentinel-2 SR Harmonized · Google Earth Engine · P25 real por píxel · "
+            "3 años de historia · Filtro de nubosidad por SCL dentro del predio"
         )
 
         _ndvi_thr = st.slider(
