@@ -568,19 +568,6 @@ def _fit(m, gdf):
     b = gdf.geometry.iloc[0].bounds
     m.fit_bounds([[b[1],b[0]],[b[3],b[2]]])
 
-def _colored_mask_png(mask_arr, r, g, b, alpha=0.55):
-    """Converts a boolean mask to a colored PNG base64 string for ImageOverlay."""
-    from io import BytesIO
-    import base64
-    from PIL import Image as _PILImg
-    h, w = mask_arr.shape
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[mask_arr] = [r, g, b, int(alpha * 255)]
-    img = _PILImg.fromarray(rgba, mode="RGBA")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
 def _polygonize_mask(mask, bounds_wgs84, src_crs="EPSG:4326"):
     """Poligoniza una máscara booleana → GeoDataFrame con la unión de las
     celdas True.
@@ -620,71 +607,72 @@ def _polygonize_mask(mask, bounds_wgs84, src_crs="EPSG:4326"):
         return gpd.GeoDataFrame(geometry=[], crs=src_crs)
 
 
-def _compute_area_efectiva(predio_gdf, area_total, terrain, ndvi_res, gdf_const):
-    """Área efectiva cultivable = area_total − área(unión de zonas no cultivables).
+def _metric_crs(predio_gdf):
+    """CRS métrico local (UTM) para áreas exactas. Determinista para un mismo
+    predio, así todas las capas se proyectan al mismo sistema."""
+    try:
+        return predio_gdf.estimate_utm_crs()
+    except Exception:
+        return "EPSG:3857"
 
-    Poligoniza pendiente>umbral (terreno), NDVI<umbral y construcciones, recorta
-    cada capa al polígono del predio en un CRS métrico común y las une (la unión
-    evita el doble conteo de solapamientos). Las áreas por componente se escalan
-    al área catastral mediante el ratio respecto al predio proyectado, de modo
-    que la distorsión de la proyección se cancela."""
+
+def _clip_geom_to_predio(gdf_src, predio_gdf, area_total, metric_crs=None):
+    """Recorta una geometría (capa no cultivable) al polígono del predio y
+    calcula su área DENTRO del predio.
+
+    `gdf_src` puede venir de poligonizar un raster o ser vector (construcciones).
+    Devuelve dict {geom_metric, metric_crs, gdf_4326, area_ha} o None si la
+    intersección con el predio es vacía. El área se escala al área catastral
+    mediante el ratio respecto al predio proyectado (la distorsión se cancela)."""
     from shapely.ops import unary_union
-
-    METRIC   = "EPSG:3857"
-    predio_m = predio_gdf.to_crs(METRIC)
-    predio_g = predio_m.geometry.iloc[0]
+    if gdf_src is None or len(gdf_src) == 0:
+        return None
+    METRIC   = metric_crs or _metric_crs(predio_gdf)
+    predio_g = predio_gdf.to_crs(METRIC).geometry.iloc[0]
     predio_a = predio_g.area
-
-    def _clip(gdf):
-        if gdf is None or len(gdf) == 0:
-            return None
-        try:
-            g = unary_union(gdf.to_crs(METRIC).geometry.values.tolist())
-            g = g.intersection(predio_g)
-            return None if g.is_empty else g
-        except Exception:
-            return None
-
-    def _ha(geom):
-        return area_total * (geom.area / predio_a) if (geom is not None and predio_a > 0) else 0.0
-
-    layers, names = {}, []
-
-    if terrain is not None and terrain.get("no_cultivable_mask") is not None:
-        g = _clip(_polygonize_mask(terrain["no_cultivable_mask"],
-                                   terrain.get("bounds_wgs84"), src_crs="EPSG:3857"))
-        if g is not None:
-            layers["pendiente"] = g; names.append("pendiente")
-
-    if ndvi_res is not None and ndvi_res.get("low_ndvi_mask") is not None:
-        g = _clip(_polygonize_mask(ndvi_res["low_ndvi_mask"],
-                                   ndvi_res.get("bounds_wgs84"), src_crs="EPSG:4326"))
-        if g is not None:
-            layers["ndvi"] = g; names.append("NDVI")
-
-    g = _clip(gdf_const)
-    if g is not None:
-        layers["const"] = g; names.append("construcciones")
-
-    area_pend  = _ha(layers.get("pendiente"))
-    area_ndvi  = _ha(layers.get("ndvi"))
-    area_const = _ha(layers.get("const"))
-
-    area_excluida = _ha(unary_union(list(layers.values()))) if layers else 0.0
-
-    area_ef = round(max(area_total - area_excluida, 0.0), 2)
-    pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
-    metodo  = ("exacto · unión vectorial (" + " + ".join(names) + ")"
-               if names else "sin capas no cultivables calculadas")
-
+    try:
+        geom = unary_union(gdf_src.to_crs(METRIC).geometry.values.tolist())
+        geom = geom.intersection(predio_g)
+    except Exception:
+        return None
+    if geom.is_empty:
+        return None
+    area_ha = area_total * (geom.area / predio_a) if predio_a > 0 else 0.0
     return {
-        "area_pend":     area_pend,
-        "area_ndvi":     area_ndvi,
-        "area_const":    area_const,
-        "area_excluida": round(area_excluida, 3),
-        "area_ef":       area_ef,
-        "pct_ef":        pct_ef,
-        "metodo":        metodo,
+        "geom_metric": geom,
+        "metric_crs":  str(METRIC),
+        "gdf_4326":    gpd.GeoDataFrame(geometry=[geom], crs=METRIC).to_crs("EPSG:4326"),
+        "area_ha":     round(area_ha, 4),
+    }
+
+
+def _poly_from_mask(mask, bounds_wgs84, src_crs, predio_gdf, area_total, metric_crs=None):
+    """Poligoniza una máscara raster y la recorta al predio (atajo combinado)."""
+    return _clip_geom_to_predio(
+        _polygonize_mask(mask, bounds_wgs84, src_crs=src_crs),
+        predio_gdf, area_total, metric_crs=metric_crs,
+    )
+
+
+def _area_efectiva_from_polys(predio_gdf, area_total, polys):
+    """Área efectiva = area_total − área(unión de capas no cultivables ya
+    recortadas al predio). `polys` es un dict nombre→dict (de _clip_geom_to_predio).
+    La unión evita el doble conteo de solapamientos entre A2A, A2B y A2C."""
+    from shapely.ops import unary_union
+    geoms = [p["geom_metric"] for p in polys.values() if p]
+    if not geoms:
+        area_no_cult = 0.0
+    else:
+        METRIC   = _metric_crs(predio_gdf)
+        predio_a = predio_gdf.to_crs(METRIC).geometry.iloc[0].area
+        union    = unary_union(geoms)
+        area_no_cult = area_total * (union.area / predio_a) if predio_a > 0 else 0.0
+    area_ef = round(max(area_total - area_no_cult, 0.0), 2)
+    pct_ef  = round(area_ef / area_total * 100) if area_total > 0 else 0
+    return {
+        "area_no_cultivable": round(area_no_cult, 4),
+        "area_ef":            area_ef,
+        "pct_ef":             pct_ef,
     }
 
 def mapa_predio_simple(lat, lon, predio):
@@ -747,7 +735,8 @@ with tab_inicio:
                        "ndvi_result","area_ef_result","area_ef_computed","b2_result",
                        "gdf_frontera","gdf_aptitud","gdf_construcciones",
                        "a1_nivel","a2_nivel","area_pendiente_excluida_ha",
-                       "area_ndvi_bajo_ha","area_construcciones_ha"]:
+                       "area_ndvi_bajo_ha","area_construcciones_ha",
+                       "poly_pendiente","poly_ndvi","poly_const","ndvi_low_mask"]:
                 st.session_state.pop(_k, None)
             st.rerun()
 
@@ -2125,12 +2114,35 @@ with tab_validacion:
                                    yaxis=dict(title="% del área", range=[0,max(_valores)*1.2]),
                                    xaxis=dict(tickangle=-20), showlegend=False)
             st.plotly_chart(_fig_cls, use_container_width=True)
-            st.session_state["area_pendiente_excluida_ha"] = _s["area_no_cultivable_ha"]
+
+            # ── Polígono no cultivable (pendiente) recortado al predio ──────
+            _at_p   = _pr.get("area_ha") or float(
+                _pr["gdf"].to_crs(_metric_crs(_pr["gdf"])).geometry.iloc[0].area / 10_000)
+            _poly_p = _poly_from_mask(
+                _t["no_cultivable_mask"], _t.get("bounds_wgs84"),
+                "EPSG:3857", _pr["gdf"], _at_p)
+            st.session_state["poly_pendiente"] = _poly_p
+            st.session_state["area_pendiente_excluida_ha"] = (
+                _poly_p["area_ha"] if _poly_p else 0.0)
+
+            st.markdown("---")
+            st.markdown(f"**🔻 Polígono no cultivable (pendiente ≥ {_slope_thr}%) · recortado al predio**")
+            _m_p = _base_map(_pr["gdf"]); _add_predio(_m_p, _pr["gdf"])
+            if _poly_p is not None:
+                folium.GeoJson(
+                    data=_poly_p["gdf_4326"].to_json(),
+                    style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
+                                               "weight":1.5,"fillOpacity":0.55},
+                    name="Pendiente ≥ umbral",
+                ).add_to(_m_p)
+            _fit(_m_p, _pr["gdf"])
+            st_folium(_m_p, width=700, height=360, returned_objects=[], key="map_pend_poly")
+            kpi("Área no cultivable por pendiente (dentro del predio)",
+                f"{(_poly_p['area_ha'] if _poly_p else 0.0):.4f}", "ha")
             st.caption(
-                "ℹ️ El área mostrada aquí usa la resolución nativa del DEM (~30 m). "
-                "En la tabla de Área Efectiva (A2) todos los componentes se recomputan "
-                "sobre el grid de 10 m del NDVI para garantizar coherencia — "
-                "los valores pueden diferir ligeramente."
+                "Área obtenida poligonizando la máscara de pendiente y recortándola "
+                "exactamente al polígono del predio — no cuenta fracciones de píxel "
+                "que caen fuera del predio. Es el valor usado en el Área Efectiva (A2)."
             )
 
 
@@ -2238,8 +2250,36 @@ with tab_validacion:
                 )
                 st.plotly_chart(fig_ts, use_container_width=True)
 
-            st.session_state["area_ndvi_bajo_ha"] = _res["area_low_ha"]
-            st.session_state["ndvi_low_mask"]     = _res["low_ndvi_mask"]
+            st.session_state["ndvi_low_mask"] = _res["low_ndvi_mask"]
+
+            # ── Polígono no productivo (NDVI bajo) recortado al predio ──────
+            _at_n   = _pr.get("area_ha") or float(
+                _pr["gdf"].to_crs(_metric_crs(_pr["gdf"])).geometry.iloc[0].area / 10_000)
+            _poly_n = _poly_from_mask(
+                _res["low_ndvi_mask"], _res.get("bounds_wgs84"),
+                "EPSG:4326", _pr["gdf"], _at_n)
+            st.session_state["poly_ndvi"] = _poly_n
+            st.session_state["area_ndvi_bajo_ha"] = (
+                _poly_n["area_ha"] if _poly_n else 0.0)
+
+            st.markdown("---")
+            st.markdown(f"**🔻 Polígono no productivo (NDVI < {_ndvi_thr:.2f}) · recortado al predio**")
+            _m_n = _base_map(_pr["gdf"]); _add_predio(_m_n, _pr["gdf"])
+            if _poly_n is not None:
+                folium.GeoJson(
+                    data=_poly_n["gdf_4326"].to_json(),
+                    style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
+                                               "weight":1.5,"fillOpacity":0.55},
+                    name="NDVI < umbral",
+                ).add_to(_m_n)
+            _fit(_m_n, _pr["gdf"])
+            st_folium(_m_n, width=700, height=360, returned_objects=[], key="map_ndvi_poly")
+            kpi("Área no productiva por NDVI (dentro del predio)",
+                f"{(_poly_n['area_ha'] if _poly_n else 0.0):.4f}", "ha")
+            st.caption(
+                "Área obtenida poligonizando la máscara de NDVI bajo y recortándola "
+                "exactamente al polígono del predio. Es el valor usado en el Área Efectiva (A2)."
+            )
 
 
     @st.fragment
@@ -2279,60 +2319,55 @@ with tab_validacion:
 
         area_total = _pr.get("area_ha", _d["area_total_ha"])
         # Umbrales tomados del RESULTADO calculado (no del slider vivo) para que
-        # la etiqueta coincida siempre con la máscara realmente usada. Si el
-        # usuario mueve el slider sin recalcular, el resultado refleja el último
-        # cálculo, no el valor pendiente del slider.
+        # la etiqueta coincida siempre con la máscara realmente usada.
         _slope_pct = (_terrain.get("slope_threshold")
                       if _terrain else st.session_state.get("slope_threshold", 25))
         _ndvi_thr  = (_ndvi_res.get("ndvi_threshold")
                       if _ndvi_res else st.session_state.get("ndvi_threshold", 0.25))
-        _gdf_const = st.session_state.get("gdf_construcciones")
-        _n_mask    = _ndvi_res.get("low_ndvi_mask")     if _ndvi_res else None
-        _s_bounds  = _terrain.get("bounds_wgs84")       if _terrain  else None
 
-        # ── Área no cultivable: enfoque vectorial robusto ──────────────
-        # Poligonizamos cada raster en su propio grid/CRS (pendiente en 3857,
-        # NDVI en 4326), reproyectamos a un CRS métrico común, recortamos al
-        # predio y unimos las geometrías. area_ef = area_total − área(unión).
-        # Esto evita el desajuste de grids del método anterior (la máscara de
-        # pendiente tiene buffer y otra resolución/CRS que el grid NDVI).
-        _ef = _compute_area_efectiva(
-            _pr["gdf"], area_total, _terrain, _ndvi_res, _gdf_const,
-        )
-        area_pend     = _ef["area_pend"]
-        area_ndvi     = _ef["area_ndvi"]
-        area_const    = _ef["area_const"]
-        area_excluida = _ef["area_excluida"]
-        area_ef       = _ef["area_ef"]
-        pct_ef        = _ef["pct_ef"]
-        metodo        = _ef["metodo"]
+        # Polígonos no cultivables YA recortados al predio en A2-A/A2-B/A2-C.
+        # Aquí solo los unimos (la unión evita el doble conteo de solapamientos).
+        _poly_p = st.session_state.get("poly_pendiente")
+        _poly_n = st.session_state.get("poly_ndvi")
+        _poly_c = st.session_state.get("poly_const")
 
-        # ── Map ───────────────────────────────────────────────────────
+        _polys = {}
+        if _poly_p: _polys["pendiente"]      = _poly_p
+        if _poly_c: _polys["construcciones"] = _poly_c
+        if _poly_n: _polys["ndvi"]           = _poly_n
+
+        _ef          = _area_efectiva_from_polys(_pr["gdf"], area_total, _polys)
+        area_no_cult = _ef["area_no_cultivable"]
+        area_ef      = _ef["area_ef"]
+        pct_ef       = _ef["pct_ef"]
+
+        area_pend  = _poly_p["area_ha"] if _poly_p else 0.0
+        area_ndvi  = _poly_n["area_ha"] if _poly_n else 0.0
+        area_const = _poly_c["area_ha"] if _poly_c else 0.0
+
+        # ── Map: predio + capas no cultivables (polígonos recortados) ──
         m_a1 = _base_map(_pr["gdf"])
         if ver_predio_a1: _add_predio(m_a1, _pr["gdf"])
-        if ver_pendiente and _terrain is not None and _s_bounds is not None:
-            slope_png = _colored_mask_png(_terrain["no_cultivable_mask"], 220, 38, 38)
-            bx_s = [[_s_bounds[1], _s_bounds[0]], [_s_bounds[3], _s_bounds[2]]]
-            folium.raster_layers.ImageOverlay(
-                image=slope_png, bounds=bx_s, opacity=1.0,
-                name=f"Pendiente >{_slope_pct}%",
+        if ver_pendiente and _poly_p:
+            folium.GeoJson(
+                data=_poly_p["gdf_4326"].to_json(),
+                style_function=lambda _: {"fillColor":"#dc2626","color":"#b91c1c",
+                                           "weight":1.5,"fillOpacity":0.55},
+                name=f"Pendiente ≥ {_slope_pct}%",
             ).add_to(m_a1)
-        if ver_ndvi_bajo and _n_mask is not None:
-            _ndvi_bounds = _ndvi_res.get("bounds_wgs84") if _ndvi_res else None
-            if _ndvi_bounds is None:
-                _ndvi_bounds = _pr["gdf"].to_crs("EPSG:4326").total_bounds.tolist()
-            ndvi_png = _colored_mask_png(_n_mask, 234, 179, 8)
-            bx_n = [[_ndvi_bounds[1], _ndvi_bounds[0]], [_ndvi_bounds[3], _ndvi_bounds[2]]]
-            folium.raster_layers.ImageOverlay(
-                image=ndvi_png, bounds=bx_n, opacity=1.0,
+        if ver_ndvi_bajo and _poly_n:
+            folium.GeoJson(
+                data=_poly_n["gdf_4326"].to_json(),
+                style_function=lambda _: {"fillColor":"#eab308","color":"#ca8a04",
+                                           "weight":1.5,"fillOpacity":0.55},
                 name=f"NDVI < {_ndvi_thr:.2f}",
             ).add_to(m_a1)
-        if ver_const_a1 and _gdf_const is not None and len(_gdf_const) > 0:
+        if ver_const_a1 and _poly_c:
             folium.GeoJson(
-                data=_gdf_const.to_json(),
+                data=_poly_c["gdf_4326"].to_json(),
                 style_function=lambda _: {"fillColor":"#f97316","color":"#ea580c",
                                            "weight":1.5,"fillOpacity":0.70},
-                tooltip="Construcción",
+                name="Construcciones",
             ).add_to(m_a1)
         _fit(m_a1, _pr["gdf"])
         st_folium(m_a1, width=700, height=380, returned_objects=[], key="map_a1")
@@ -2340,37 +2375,40 @@ with tab_validacion:
         # ── Table + gauge ─────────────────────────────────────────────
         c_left, c_right = st.columns([2, 1])
         with c_left:
-            solapamiento = round(area_pend + area_ndvi + area_const - area_excluida, 3)
-            _componentes = ["Área total del predio",
-                            f"− Pendiente >{_slope_pct}% (A2-A)",
-                            f"− NDVI < {_ndvi_thr:.2f} (A2-C)",
-                            "− Construcciones (A2-B)"]
-            _hectareas   = [area_total, -area_pend, -area_ndvi, -area_const]
-            if solapamiento > 0:
-                _componentes.append(f"  ↳ Solapamiento recuperado ({metodo})")
-                _hectareas.append(solapamiento)
-            _componentes.append("✅ Área efectiva cultivable")
-            _hectareas.append(area_ef)
-            df_area = pd.DataFrame({"Componente": _componentes, "Hectáreas": _hectareas})
+            df_area = pd.DataFrame({
+                "Componente": [
+                    "Área total del predio",
+                    "− Área no cultivable (unión de A2A + A2B + A2C)",
+                    "✅ Área efectiva cultivable",
+                ],
+                "Hectáreas": [round(area_total, 4), -round(area_no_cult, 4), area_ef],
+            })
             st.dataframe(
                 df_area.style.apply(lambda x: [
-                    "font-weight:bold;background:#d1fae5" if "✅" in str(v) else
-                    "color:#64748b;font-style:italic"     if "↳"  in str(v) else ""
+                    "font-weight:bold;background:#d1fae5" if "✅" in str(v) else ""
                     for v in x], axis=1),
                 use_container_width=True, hide_index=True,
+            )
+            _suma = round(area_pend + area_ndvi + area_const, 4)
+            st.caption(
+                "Áreas individuales recortadas al predio (informativas, pueden solaparse): "
+                f"pendiente {area_pend:.4f} ha · construcciones {area_const:.4f} ha · "
+                f"NDVI bajo {area_ndvi:.4f} ha. Suma simple = {_suma:.4f} ha; "
+                f"**unión sin doble conteo = {area_no_cult:.4f} ha** (valor restado)."
             )
         with c_right:
             st.plotly_chart(gauge_riesgo(pct_ef, "% Área efectiva"), use_container_width=True)
             kpi("Área efectiva", area_ef, "ha")
 
         st.session_state["area_ef_result"] = {
-            "area_ef":   area_ef,
-            "pct_ef":    pct_ef,
-            "area_pend": area_pend,
-            "area_ndvi": area_ndvi,
-            "area_const": area_const,
-            "slope_pct": _slope_pct,
-            "ndvi_thr":  _ndvi_thr,
+            "area_ef":            area_ef,
+            "pct_ef":             pct_ef,
+            "area_no_cultivable": area_no_cult,
+            "area_pend":          area_pend,
+            "area_ndvi":          area_ndvi,
+            "area_const":         area_const,
+            "slope_pct":          _slope_pct,
+            "ndvi_thr":           _ndvi_thr,
         }
 
 
@@ -2406,8 +2444,13 @@ with tab_validacion:
                 nombre_capa="Construcciones",
             ), width=700, height=350, returned_objects=[], key="map_const")
 
+        # ── Construcciones recortadas al predio (para Área Efectiva A2) ──
+        _at_c = predio.get("area_ha") or float(
+            predio["gdf"].to_crs(_metric_crs(predio["gdf"])).geometry.iloc[0].area / 10_000)
+        _poly_c = _clip_geom_to_predio(gdf_const, predio["gdf"], _at_c)
+        st.session_state["poly_const"] = _poly_c
         st.session_state["area_construcciones_ha"] = (
-            area_const_real if gdf_const is not None else 0.0)
+            _poly_c["area_ha"] if _poly_c else 0.0)
 
 
     with st.expander("🛰️ A2C · Análisis de Actividad Productiva (NDVI)", expanded=True):
