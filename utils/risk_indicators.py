@@ -11,7 +11,10 @@ Approach:
   2. Calcula el valor del indicador año a año (10 años).
   3. Interpola el score [0,1] en la curva de vulnerabilidad.
      Los breakpoints pueden ser numéricos o en formato MM/DD (ej. soil_warming).
-  4. Usa el P80 anual como referencia para el análisis de riesgo crediticio.
+  4. Usa el percentil anual del "año adverso" como referencia para el riesgo
+     crediticio: P80 para indicadores de curva creciente (más valor = más
+     riesgo) y P20 para los de curva decreciente (menos valor = más riesgo,
+     p.ej. 'Lluvia - Necesidades hídricas' / índice de sequía).
 """
 
 import ast
@@ -85,6 +88,18 @@ def _parse_breakpoint(v):
         return None
 
 
+def _curve_is_decreasing(row: pd.Series) -> bool:
+    """
+    True si la vulnerabilidad CRECE cuando el valor del indicador DISMINUYE
+    (curva decreciente). Caso típico: 'Lluvia - Necesidades hídricas', donde a
+    menor precipitación acumulada mayor riesgo de sequía.
+
+    Detecta tanto el español ('decreciente') como el inglés ('decreasing').
+    """
+    curve = str(row.get("Forma_curva", "")).lower()
+    return "decre" in curve   # 'decreciente' (ES) · 'decreasing' (EN)
+
+
 def score_from_curve(value: float, row: pd.Series) -> float:
     """
     Interpola el score [0,1] dado el valor del indicador y los breakpoints
@@ -108,8 +123,7 @@ def score_from_curve(value: float, row: pd.Series) -> float:
 
     vals   = [v for v, _ in bp]
     scores = [s for _, s in bp]
-    curve  = str(row.get("Forma_curva", "")).lower()
-    decr   = "decreas" in curve
+    decr   = _curve_is_decreasing(row)
 
     if decr:
         if value >= vals[0]:  return 0.0
@@ -368,8 +382,16 @@ def compute_risk_for_crop(
         if not annual_vals:
             continue
 
+        # Percentil de referencia para el "año adverso":
+        #   · curva creciente  → riesgo crece con el valor → cola ALTA  (P80)
+        #   · curva decreciente→ riesgo crece al bajar el valor → cola BAJA (P20)
+        #     (excepción 'Lluvia - Necesidades hídricas': precipitación acumulada,
+        #      índice de sequía; menos lluvia = más riesgo)
+        decr = _curve_is_decreasing(row)
+        pct  = 20 if decr else 80
+
         v_mean = float(np.mean(annual_vals))
-        v_p80  = float(np.percentile(annual_vals, 80))
+        v_p80  = float(np.percentile(annual_vals, pct))   # P80 creciente / P20 decreciente
         v_max  = float(np.max(annual_vals))
 
         s_mean = score_from_curve(v_mean, row)
@@ -386,6 +408,7 @@ def compute_risk_for_crop(
             "valor_medio":                round(v_mean, 2),
             "valor_p80":                  round(v_p80,  2),
             "valor_max":                  round(v_max,  2),
+            "percentil_ref":              pct,
             "score_medio":                round(s_mean, 3) if not np.isnan(s_mean) else None,
             "score_p80":                  round(s_p80,  3) if not np.isnan(s_p80)  else None,
             "score_max":                  round(s_max,  3) if not np.isnan(s_max)  else None,

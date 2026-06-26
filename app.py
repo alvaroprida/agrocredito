@@ -1516,16 +1516,22 @@ El cultivo activo actualmente es: **{_cult_m.capitalize()}**.
 
 **Metodología**
 1. Se calculan indicadores de riesgo anualmente para cada año del período.
-2. Para la evaluación crediticia se usa el **percentil 80 (P80)** de cada indicador —
-   el escenario adverso que ocurre **1 de cada 5 años**.
+2. Para la evaluación crediticia se usa el percentil del **año adverso** (1 de
+   cada 5 años) de cada indicador:
+   - **P80** en indicadores de curva **creciente** (a mayor valor, mayor riesgo).
+   - **P20** en indicadores de curva **decreciente** (a menor valor, mayor riesgo)
+     — **excepción** de la categoría **'Lluvia - Necesidades hídricas'** (índice de
+     sequía): la precipitación acumulada disminuye al aumentar el riesgo, por lo que
+     el año adverso está en la cola baja de la serie.
 3. El score por indicador se interpola linealmente entre los umbrales de la
    **curva de vulnerabilidad** (0 = sin riesgo, 1 = extremo).
 4. El score global por categoría toma el **peor indicador** de esa categoría.
 5. El score global D es la **media de los peores por categoría**.
 
 **Hipótesis**
-Usar el P80 captura el riesgo latente de años adversos que históricamente
-han causado pérdidas de cultivo, sin sobredimensionar los años normales.
+Usar el percentil del año adverso (P80 / P20 según la dirección de la curva) captura
+el riesgo latente de años extremos que históricamente han causado pérdidas de cultivo,
+sin sobredimensionar los años normales.
 """)
         with c2:
             st.markdown("""
@@ -3031,6 +3037,15 @@ with tab_validacion:
             "Se usa el **percentil 80 anual** (escenario adverso 1 de cada 5 años) como "
             "referencia para el análisis crediticio."
         )
+        st.info(
+            "ℹ️ **Excepción · indicadores de curva decreciente** (categoría "
+            "**'Lluvia - Necesidades hídricas'**, índice de sequía): la precipitación "
+            "acumulada **disminuye** a medida que aumenta el riesgo, por lo que el año "
+            "adverso está en la cola baja de la serie. Para estos indicadores se usa el "
+            "**percentil 20 (P20)** en lugar del P80. En la tabla se marcan con `P20` "
+            "junto al valor.",
+            icon="💧",
+        )
 
         if not _cultivo_tiene_matriz:
             st.warning(
@@ -3114,13 +3129,16 @@ with tab_validacion:
                             if v is None: return "—"
                             return _doy_to_mmdd(v) if _is_date else f"{v} {_u}"
                         score_str = f"{r['score_p80']:.2f}" if r["score_p80"] is not None else "—"
+                        _pct_ref = int(r.get("percentil_ref", 80))
+                        _pmark   = ('<span style="color:#0369a1;font-size:0.7rem"> P20</span>'
+                                    if _pct_ref == 20 else "")
                         rows_html += (
                             f'<tr style="background:{bg}">'
                             f'<td style="padding:5px 8px;color:{fg};font-weight:600;white-space:nowrap">'
                             f'{r["riesgo_label"]}</td>'
                             f'<td style="padding:5px 8px">{r["Nombre_indicador"]}</td>'
                             f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_medio"])}</td>'
-                            f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_p80"])}</td>'
+                            f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{_fmt(r["valor_p80"])}{_pmark}</td>'
                             f'<td style="padding:5px 8px;text-align:right">{score_str}</td>'
                             f'</tr>'
                         )
@@ -3141,7 +3159,8 @@ with tab_validacion:
                 st.markdown("**Curvas de vulnerabilidad por indicador**")
                 st.caption(
                     "Valores de referencia que delimitan cada nivel de riesgo. "
-                    "El score P80 es el usado para la clasificación."
+                    "El score del año adverso es el usado para la clasificación "
+                    "(P80 en curvas crecientes; P20 en curvas decrecientes, marcadas con `P20`)."
                 )
                 cols_curva = ["Nombre_indicador", "Unidad",
                               "Sin_riesgo_0", "Riesgo_bajo_0.25",
