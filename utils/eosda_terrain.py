@@ -24,7 +24,7 @@ from rasterio.merge import merge
 from rasterio.transform import from_bounds
 import geopandas as gpd
 from PIL import Image
-import matplotlib.cm as cm
+import matplotlib
 import matplotlib.colors as mcolors
 
 warnings.filterwarnings("ignore")
@@ -242,7 +242,7 @@ def _array_to_png_b64(arr: np.ndarray, colormap: str,
     if vmax is None: vmax = float(np.nanmax(data))
 
     norm   = mcolors.Normalize(vmin=vmin, vmax=vmax)
-    mapper = cm.get_cmap(colormap)
+    mapper = matplotlib.colormaps[colormap]
     rgba   = mapper(norm(data))
 
     nan_mask = np.isnan(data)
