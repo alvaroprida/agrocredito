@@ -1453,37 +1453,50 @@ Un predio sin acceso vial o muy alejado de centros urbanos enfrenta mayores cost
 de transporte y riesgo de inaccesibilidad en épocas de lluvias, lo que reduce
 la rentabilidad y la capacidad de repago.
 """)
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("""
-**C1 · Distancia al centro urbano más cercano**
+**C1 · Centro urbano (carretera)**
 
 - Fuente: OpenStreetMap (OSM) + OSRM routing engine
-- Métrica: distancia por carretera (km) y tiempo estimado de conducción (min)
+- Métrica: distancia por carretera (km) y tiempo de conducción (min)
 - Búsqueda en radio de 80 km
 
-| Distancia | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| < 10 km   | 🟢 Verde    | Sin restricción |
-| 10 – 25 km | 🟡 Amarillo | Verificar costos de transporte en estructura del proyecto |
-| > 25 km   | 🔴 Rojo     | Riesgo logístico alto; verificar acceso a mercados y precios en finca |
+| Distancia | Semáforo |
+|-----------|----------|
+| < 10 km   | 🟢 Verde    |
+| 10 – 25 km | 🟡 Amarillo |
+| > 25 km   | 🔴 Rojo     |
 """)
         with c2:
             st.markdown("""
-**C2 · Distancia a vía transitable más cercana**
+**C3 · Centro urbano (línea recta)**
 
 - Fuente: OpenStreetMap (OSM)
-- Métrica: distancia en línea recta al punto más cercano en vía clasificada
+- Métrica: distancia geodésica directa al centro urbano más cercano
+- Aproxima el acceso al mercado independiente de la red vial
+
+| Distancia | Semáforo |
+|-----------|----------|
+| < 5 km    | 🟢 Verde    |
+| 5 – 15 km | 🟡 Amarillo |
+| > 15 km   | 🔴 Rojo     |
+""")
+        with c3:
+            st.markdown("""
+**C2 · Vía transitable más cercana**
+
+- Fuente: OpenStreetMap (OSM)
+- Métrica: distancia en línea recta a la vía clasificada más cercana
 - Búsqueda en radio de 5 km
 
-| Distancia | Semáforo | Acción recomendada |
-|-----------|----------|--------------------|
-| < 500 m    | 🟢 Verde    | Sin restricción |
-| 500 m – 2 km | 🟡 Amarillo | Verificar condición de la vía en temporada de lluvias |
-| > 2 km     | 🔴 Rojo     | Riesgo de inaccesibilidad; costos del primer tramo pueden inviabilizar el negocio |
-
-**Semáforo global C** = peor resultado entre C1 y C2.
+| Distancia | Semáforo |
+|-----------|----------|
+| < 500 m    | 🟢 Verde    |
+| 500 m – 2 km | 🟡 Amarillo |
+| > 2 km     | 🔴 Rojo     |
 """)
+        st.markdown("**Semáforo global C** = peor resultado entre C1, C2 y C3.")
 
     # ─── D · RIESGO AGROCLIMÁTICO ─────────────────────────────────────────────
     with st.expander("🌧️ D · Riesgo Agroclimático", expanded=True):
@@ -2733,9 +2746,9 @@ with tab_validacion:
 
         st.caption(
             "Evalúa la conectividad física del predio con los mercados y la red vial. "
-            "El semáforo global refleja el peor de los dos indicadores: un predio cerca "
-            "de la ciudad pero sin acceso a carretera tiene el mismo riesgo logístico "
-            "que uno alejado con buena vía."
+            "El semáforo global refleja el peor de los tres indicadores: distancia al "
+            "centro urbano por carretera, distancia al centro urbano en línea recta y "
+            "distancia a la vía transitable más cercana."
         )
 
         _centroid = predio["gdf"].geometry.iloc[0].centroid
@@ -2745,11 +2758,17 @@ with tab_validacion:
             infra_centro = _get_distancia_centro_cached(c_lat, c_lon)
             infra_via    = _get_distancia_via_cached(c_lat, c_lon)
 
-        # ── Semáforo global (peor caso) ───────────────────────────────
+        # ── Semáforos por indicador y global (peor de los 3) ──────────
         _COLOR_RANK = {"verde": 0, "naranja": 1, "rojo": 2}
         _color_cu  = (
             "verde" if infra_centro and infra_centro["distancia_km"] < 10 else
             "naranja" if infra_centro and infra_centro["distancia_km"] < 25 else
+            "rojo"
+        )
+        _dist_recta  = infra_centro["dist_recta_km"] if infra_centro else None
+        _color_recta = (
+            "verde" if _dist_recta is not None and _dist_recta < 5 else
+            "naranja" if _dist_recta is not None and _dist_recta < 15 else
             "rojo"
         )
         _color_via = (
@@ -2757,21 +2776,23 @@ with tab_validacion:
             "naranja" if infra_via and infra_via["distancia_m"] < 2000 else
             "rojo"
         )
-        _color_global = max([_color_cu, _color_via], key=lambda c: _COLOR_RANK[c])
+        _color_global = max([_color_cu, _color_recta, _color_via], key=lambda c: _COLOR_RANK[c])
         _label_global = {"verde": "Acceso adecuado", "naranja": "Acceso medio", "rojo": "Acceso bajo"}[_color_global]
         if _color_global == "verde":
-            _detalle_global = "Ambos indicadores en rango adecuado."
+            _detalle_global = "Los tres indicadores en rango adecuado."
         else:
             _limitantes = []
             if _COLOR_RANK[_color_cu] == _COLOR_RANK[_color_global] and infra_centro:
                 _limitantes.append(f"centro urbano ({infra_centro['distancia_km']} km por carretera)")
+            if _COLOR_RANK[_color_recta] == _COLOR_RANK[_color_global] and _dist_recta is not None:
+                _limitantes.append(f"centro urbano ({_dist_recta} km en línea recta)")
             if _COLOR_RANK[_color_via] == _COLOR_RANK[_color_global] and infra_via:
                 _limitantes.append(f"vía transitable ({infra_via['distancia_m']:.0f} m en línea recta)")
             _detalle_global = "Limitante: " + " · ".join(_limitantes) + "."
         semaforo(f"**{_label_global}** · {_detalle_global}", _color_global)
 
         st.markdown("---")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
 
         # ── C1 · Distancia al centro urbano más cercano ───────────────
         with c1:
@@ -2811,32 +2832,53 @@ with tab_validacion:
                     _color_via,
                 )
 
+        # ── C3 · Distancia en línea recta al centro urbano ────────────
+        with c3:
+            st.markdown("#### 📏 Centro urbano (línea recta)")
+            if infra_centro is None or _dist_recta is None:
+                st.warning("No se encontró centro urbano en un radio de 80 km.")
+            else:
+                kpi("Distancia en línea recta", _dist_recta, "km")
+                st.caption(
+                    f"**{infra_centro['nombre']}** ({infra_centro['tipo']}) · "
+                    f"acceso directo a mercado"
+                )
+                semaforo(
+                    f"{'< 5 km' if _dist_recta < 5 else '5–15 km' if _dist_recta < 15 else '> 15 km'} "
+                    f"en línea recta ({_dist_recta} km).",
+                    _color_recta,
+                )
+
         # ── Leyenda de umbrales ───────────────────────────────────────
         st.markdown("""
 <table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:0.8rem">
 <thead><tr style="background:#f1f5f9;font-weight:600;text-align:center">
   <td style="padding:5px 10px">Condición</td>
-  <td style="padding:5px 10px">Centro urbano</td>
+  <td style="padding:5px 10px">Centro urbano<br>(carretera)</td>
+  <td style="padding:5px 10px">Centro urbano<br>(línea recta)</td>
   <td style="padding:5px 10px">Vía transitable</td>
 </tr></thead>
 <tr style="background:#d1fae5;text-align:center">
   <td style="padding:6px 10px">🟢 Acceso adecuado</td>
-  <td style="padding:6px 10px">&lt; 10 km por carretera</td>
-  <td style="padding:6px 10px">&lt; 500 m en línea recta</td>
+  <td style="padding:6px 10px">&lt; 10 km</td>
+  <td style="padding:6px 10px">&lt; 5 km</td>
+  <td style="padding:6px 10px">&lt; 500 m</td>
 </tr>
 <tr style="background:#fef3c7;text-align:center">
   <td style="padding:6px 10px">🟡 Acceso medio</td>
   <td style="padding:6px 10px">10 – 25 km</td>
+  <td style="padding:6px 10px">5 – 15 km</td>
   <td style="padding:6px 10px">500 m – 2 km</td>
 </tr>
 <tr style="background:#fee2e2;text-align:center">
   <td style="padding:6px 10px">🔴 Acceso bajo</td>
   <td style="padding:6px 10px">&gt; 25 km</td>
+  <td style="padding:6px 10px">&gt; 15 km</td>
   <td style="padding:6px 10px">&gt; 2 km</td>
 </tr>
 </table>
 <p style="font-size:0.75rem;color:#64748b;margin-top:4px">
-  El semáforo global toma el peor de los dos indicadores.
+  El semáforo global toma el peor de los tres indicadores.
 </p>
 """, unsafe_allow_html=True)
 
