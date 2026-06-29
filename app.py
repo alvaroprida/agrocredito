@@ -3410,10 +3410,10 @@ with tab_validacion:
     with c_info:
         cod_rpt = predio.get("codigo","predio")
         st.caption(
-            f"📄 Incluye: ficha del predio · dictamen ejecutivo · resumen de indicadores · "
-            f"detalle A (frontera + áreas) · B (aptitud + NDVI) · "
-            f"D (riesgo agroclimático) · C (infraestructura) · "
-            f"documentación requerida · firmas.\n\n"
+            f"📄 Pág. 1: ficha del predio · score final + resolución · "
+            f"resumen de validación pre-crédito · documentación requerida · firmas.\n\n"
+            f"Pág. 2+: análisis detallado de los indicadores (A geométrica · "
+            f"B continuidad · C infraestructura · D riesgo agroclimático).\n\n"
             f"**Archivo:** `reporte_exante_{cod_rpt}.pdf`"
         )
 
@@ -3437,9 +3437,14 @@ with tab_validacion:
                             pass
 
                     _pdf_analisis = {
-                        "a1_nivel":     st.session_state.get("a1_nivel", "verde"),
+                        "existencia_nivel": st.session_state.get("a1_nivel", "verde"),
+                        "a1_nivel":     st.session_state.get("a2_nivel", "gris"),  # frontera
                         "a2_nivel":     st.session_state.get("a2_nivel", "gris"),
                         "gdf_frontera": st.session_state.get("gdf_frontera"),
+                        "b3_nivel":     st.session_state.get("b3_nivel", "gris"),
+                        "b3_elev":      st.session_state.get("b3_elev"),
+                        "b3_alt_min":   st.session_state.get("b3_alt_min"),
+                        "b3_alt_max":   st.session_state.get("b3_alt_max"),
                         "area_ef":      st.session_state.get("area_ef_result", {}).get("area_ef", 0),
                         "pct_ef":       st.session_state.get("area_ef_result", {}).get("pct_ef", 0),
                         "area_pend":    st.session_state.get("area_ef_result", {}).get("area_pend", 0),

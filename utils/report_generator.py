@@ -3,14 +3,18 @@ utils/report_generator.py
 Reporte ex-ante PDF ejecutivo para evaluación de crédito agropecuario.
 
 Estructura:
-  1. Ficha del predio + dictamen ejecutivo
-  2. Tabla resumen de indicadores (A1, A2, B1, B2, C, D)
-  3. A · Detalle geométrico (frontera + desglose de áreas)
-  4. B · Continuidad productiva (aptitud + actividad NDVI)
-  5. D · Riesgo agroclimático
-  6. C · Infraestructura
-  7. Documentación adicional requerida
-  8. Firmas + nota legal
+  Página 1 (resumen ejecutivo):
+    1. Ficha del predio
+    2. Score final consolidado + resolución
+    3. Resumen de Validación Pre-Crédito (Existencia, A1, A2, B1, B2, B3, C, D)
+    4. Documentación adicional requerida
+    5. Aprobación y firmas
+  Página 2+ (análisis detallado de los indicadores):
+    6. A · Validación geométrica (frontera + desglose de áreas)
+    7. B · Continuidad productiva (aptitud + actividad NDVI + altitud B3)
+    8. C · Infraestructura
+    9. D · Riesgo agroclimático + serie climática
+   10. Nota legal
 """
 
 from __future__ import annotations
@@ -68,6 +72,18 @@ _DOC_REQ = {
     "D_extremo":  "Evaluar viabilidad técnica y financiera del proyecto ante nivel de riesgo extremo.",
 }
 
+# Resolución asociada al score final consolidado (1 mejor · 4 peor)
+_RESOLUCION = {
+    1: ("Apto sin restricciones relevantes",
+        "Se recomienda proceder con la evaluación crediticia ordinaria."),
+    2: ("Apto con validaciones adicionales",
+        "Procede sujeto a la documentación adicional indicada más abajo."),
+    3: ("Requiere revisión manual",
+        "Riesgo elevado: se recomienda verificación técnica presencial antes de aprobar."),
+    4: ("No recomendable bajo criterios actuales",
+        "No procede sin mitigación previa de los factores críticos identificados."),
+}
+
 MESES_ES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
 
@@ -120,10 +136,6 @@ def _build_pdf(
         "td_c":    _sty("td_c",    fontSize=8, leading=11, alignment=TA_CENTER),
         "td_sm":   _sty("td_sm",   fontSize=7.5, leading=10,
                          textColor=_hex(C.SUBTEXT), fontName="Helvetica-Oblique"),
-        "dictlbl": _sty("dictlbl", fontName="Helvetica-Bold", fontSize=15,
-                         alignment=TA_CENTER),
-        "dictdsc": _sty("dictdsc", fontSize=9, alignment=TA_CENTER,
-                         textColor=_hex(C.SUBTEXT)),
         "kpival":  _sty("kpival",  fontName="Helvetica-Bold", fontSize=12,
                          alignment=TA_CENTER),
         "kpilbl":  _sty("kpilbl",  fontSize=7.5, alignment=TA_CENTER,
@@ -189,21 +201,6 @@ def _build_pdf(
         t.setStyle(TableStyle(base))
         return t
 
-    def sem_cell(nivel):
-        """Celda coloreada con emoji de semáforo."""
-        bg = _SEM_BG.get(nivel, C.GREY_BG)
-        fg = _SEM_FG.get(nivel, C.SUBTEXT)
-        em = _SEM_EMO.get(nivel, "⚪")
-        ps = _sty("sem", fontName="Helvetica-Bold", fontSize=10,
-                  alignment=TA_CENTER, textColor=_hex(fg))
-        cell_t = Table([[Paragraph(em, ps)]], colWidths=[TW*0.08])
-        cell_t.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,-1), _hex(bg)),
-            ("TOPPADDING",    (0,0), (-1,-1), 4),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-        ]))
-        return cell_t
-
     # ══════════════════════════════════════════════════════════════════════════
     #  COLLECT DATA
     # ══════════════════════════════════════════════════════════════════════════
@@ -217,7 +214,10 @@ def _build_pdf(
     c_lat     = an.get("c_lat",  datos.get("lat",  0.0))
     c_lon     = an.get("c_lon",  datos.get("lon",  0.0))
 
-    # A1
+    # Existencia del predio
+    exist_nivel = an.get("existencia_nivel", "verde" if predio else "rojo")
+
+    # A1 · Frontera agrícola
     a1_nivel   = an.get("a1_nivel", "gris")
     gdf_front  = an.get("gdf_frontera")
 
@@ -247,6 +247,14 @@ def _build_pdf(
     b2_thr_s   = (b2["scene_threshold"] if b2 else None)
     b2_thr_p   = (b2["peak_threshold"]  if b2 else None)
 
+    # B3 altitud
+    b3_nivel    = an.get("b3_nivel", "gris")
+    b3_elev     = an.get("b3_elev")
+    b3_alt_min  = an.get("b3_alt_min")
+    b3_alt_max  = an.get("b3_alt_max")
+    b3_res      = (f"{b3_elev:.0f} m (rango {b3_alt_min}–{b3_alt_max} m)"
+                   if b3_elev is not None else "—")
+
     # C infraestructura
     c_nivel    = an.get("infra_nivel", "gris")
     infra_cu   = an.get("infra_centro")
@@ -267,36 +275,24 @@ def _build_pdf(
     decision_final = an.get("decision_final", "—")
     obs_unidad     = an.get("obs_unidad", "—")
 
-    # Global dictamen (worst of all 6)
+    # Peor semáforo (solo para el color de la tabla de documentación)
     _rank = {"verde":0,"amarillo":1,"naranja":1,"rojo":2,"gris":-1}
     _all_niveles = [a1_nivel, a2_nivel, b1_nivel, b2_nivel, c_nivel, d_nivel]
     _valid = [n for n in _all_niveles if n != "gris"]
     _worst = max(_valid, key=lambda x: _rank.get(x, 0)) if _valid else "gris"
-    _dict_labels = {
-        "verde":    ("APTO",       "El predio cumple todos los criterios de elegibilidad ex-ante.",
-                     C.GREEN_BG, C.GREEN),
-        "amarillo": ("CONDICIONAL","El predio requiere documentación adicional antes de aprobación.",
-                     C.AMBER_BG, C.AMBER),
-        "naranja":  ("CONDICIONAL","El predio requiere documentación adicional antes de aprobación.",
-                     C.AMBER_BG, C.AMBER),
-        "rojo":     ("NO APTO",   "El predio no supera los criterios mínimos de elegibilidad.",
-                     C.RED_BG,   C.RED),
-        "gris":     ("PENDIENTE", "Ejecuta los indicadores en la app para completar el análisis.",
-                     C.GREY_BG,  C.SUBTEXT),
-    }
-    d_lbl, d_desc, d_bg, d_fg = _dict_labels[_worst]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  STORY
     # ══════════════════════════════════════════════════════════════════════════
     story = []
 
-    # ── 1 · PORTADA / FICHA ───────────────────────────────────────────────────
+    # ── PORTADA / FICHA ───────────────────────────────────────────────────────
     story += [
         SP(0.4),
         P("Reporte de Evaluación Ex-Ante", "title"),
+        SP(0.22),
         P("Evaluación agroclimática y productiva para decisiones de crédito agrícola · Colombia", "sub"),
-        SP(0.3), HR(), SP(0.15),
+        SP(0.35), HR(), SP(0.15),
     ]
 
     ficha = _tbl(
@@ -319,28 +315,9 @@ def _build_pdf(
             ("FONTNAME",   (2,0), (2,-1), "Helvetica-Bold"),
         ],
     )
-    story += [ficha, SP(0.4)]
+    story += [ficha, SP(0.35)]
 
-    # ── 2 · DICTAMEN EJECUTIVO ────────────────────────────────────────────────
-    dict_ps_lbl = _sty("dl", fontName="Helvetica-Bold", fontSize=14,
-                        alignment=TA_CENTER, textColor=_hex(d_fg))
-    dict_ps_dsc = _sty("dd", fontSize=9, alignment=TA_CENTER, textColor=_hex(d_fg))
-    dict_box = Table(
-        [[Paragraph(f"DICTAMEN: {d_lbl}", dict_ps_lbl)],
-         [Paragraph(d_desc, dict_ps_dsc)]],
-        colWidths=[TW],
-    )
-    dict_box.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), _hex(d_bg)),
-        ("TOPPADDING",    (0,0), (-1,-1), 10),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
-        ("LEFTPADDING",   (0,0), (-1,-1), 14),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 14),
-        ("LINEBELOW",     (0,0), (-1,0),  1, _hex(d_fg)),
-    ]))
-    story += [dict_box, SP(0.3)]
-
-    # ── 2b · SCORE FINAL CONSOLIDADO ─────────────────────────────────────────
+    # ── SCORE FINAL CONSOLIDADO + RESOLUCIÓN ──────────────────────────────────
     if score_final is not None:
         _sf_colors = {
             1: (C.GREEN_BG, C.GREEN),
@@ -349,50 +326,69 @@ def _build_pdf(
             4: (C.RED_BG,   C.RED),
         }
         _sf_bg, _sf_fg = _sf_colors.get(score_final, (C.GREY_BG, C.SUBTEXT))
-        sf_ps = _sty("sf", fontName="Helvetica-Bold", fontSize=11,
-                     alignment=TA_CENTER, textColor=_hex(_sf_fg))
+        _res_lbl, _res_desc = _RESOLUCION.get(score_final, (decision_final, ""))
+        sf_lbl = _sty("sfl", fontName="Helvetica-Bold", fontSize=15,
+                      alignment=TA_CENTER, textColor=_hex(_sf_fg))
+        sf_sub = _sty("sfs", fontName="Helvetica-Bold", fontSize=10.5,
+                      alignment=TA_CENTER, textColor=_hex(_sf_fg))
+        sf_dsc = _sty("sfd", fontSize=9, alignment=TA_CENTER, textColor=_hex(_sf_fg))
         sf_box = Table(
-            [[Paragraph(f"SCORE FINAL: {score_final} / 4  ·  {decision_final}", sf_ps)]],
+            [[Paragraph(f"SCORE FINAL: {score_final} / 4", sf_lbl)],
+             [Paragraph(_res_lbl, sf_sub)],
+             [Paragraph(_res_desc, sf_dsc)]],
             colWidths=[TW],
         )
         sf_box.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,-1), _hex(_sf_bg)),
-            ("TOPPADDING",    (0,0), (-1,-1), 7),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+            ("TOPPADDING",    (0,0), (-1,0),  10),
+            ("BOTTOMPADDING", (0,-1),(-1,-1), 10),
+            ("TOPPADDING",    (0,1), (-1,-1), 2),
+            ("BOTTOMPADDING", (0,0), (-1,0),  2),
             ("LEFTPADDING",   (0,0), (-1,-1), 14),
             ("RIGHTPADDING",  (0,0), (-1,-1), 14),
+            ("LINEBELOW",     (0,0), (-1,0),  1, _hex(_sf_fg)),
         ]))
-        story += [sf_box, SP(0.15)]
+        story += [sf_box, SP(0.2)]
+    else:
+        story += [P("Score final no disponible — ejecuta los indicadores en la app "
+                    "para obtener la resolución consolidada.", "small"), SP(0.2)]
 
     # Obs. unidad productiva
     if obs_unidad and obs_unidad != "—":
         story.append(P(f"<b>Observación inicial asesor:</b> {obs_unidad}", "body"))
-    story.append(SP(0.25))
+        story.append(SP(0.15))
+    story.append(SP(0.1))
 
-    # ── 3 · TABLA RESUMEN DE INDICADORES ─────────────────────────────────────
-    story.append(P("Resumen de Indicadores", "h2"))
+    # ── RESUMEN DE VALIDACIÓN PRE-CRÉDITO ─────────────────────────────────────
+    story.append(P("Resumen de Validación Pre-Crédito", "h2"))
+
+    _front_res = ("Todo en Frontera Agrícola no condicionada"
+                  if a1_nivel == "verde"
+                  else "Condicionada / parcialmente fuera de frontera"
+                  if a1_nivel in ("naranja","amarillo")
+                  else "Área fuera de Frontera Agrícola" if a1_nivel == "rojo" else "—")
 
     _blq_rows = [
-        ("A1", "Zona Agrícola · Frontera",  "PostGIS / IGAC",
-         a1_nivel,
-         ("Todo en Frontera Agrícola no condicionada"
-          if a1_nivel == "verde"
-          else f"Condicionada / parcialmente fuera de frontera"
-          if a1_nivel in ("naranja","amarillo")
-          else "Área fuera de Frontera Agrícola" if a1_nivel == "rojo" else "—")),
-        ("A2", "Área Efectiva Cultivable",   "DEM · NDVI · Catastro",
+        ("",   "Existencia del Predio",       "PostGIS / IGAC",
+         exist_nivel,
+         "Polígono catastral identificado" if exist_nivel != "rojo" else "Predio no encontrado"),
+        ("A1", "Zona Agrícola · Frontera",    "PostGIS / IGAC",
+         a1_nivel, _front_res),
+        ("A2", "Área Efectiva Cultivable",    "DEM · NDVI · Catastro",
          a2_nivel, f"{area_ef:.2f} ha ({pct_ef:.0f}% del predio)"),
-        ("B1", "Aptitud al Cultivo",         "UPRA · datos.gov.co",
+        ("B1", "Aptitud al Cultivo",          "UPRA · datos.gov.co",
          b1_nivel,
          f"{apt_cat} (score {apt_score:.2f})" if apt_cat else "—"),
-        ("B2", "Actividad Productiva NDVI",  "GEE · Sentinel-2",
+        ("B2", "Actividad Productiva NDVI",   "GEE · Sentinel-2",
          b2_nivel,
          f"{b2_pct:.0f}% escenas activas · {b2_peak}/{b2_nyears} años con pico"
          if b2 else "—"),
-        ("C",  "Infraestructura / Acceso",   "OSM · OSRM",
+        ("B3", "Altitud vs. Cultivo",         "DEM Terrarium · Ref. UPRA",
+         b3_nivel, b3_res),
+        ("C",  "Infraestructura / Acceso",    "OSM · OSRM",
          c_nivel,
          f"{infra_cu['distancia_km']} km a {infra_cu['nombre']}" if infra_cu else "—"),
-        ("D",  "Riesgo Agroclimático",       "ERA5 · Open-Meteo · P80",
+        ("D",  "Riesgo Agroclimático",        "ERA5 · Open-Meteo · P80/P20",
          d_nivel, d_label if d_label != "—" else "—"),
     ]
 
@@ -425,9 +421,77 @@ def _build_pdf(
         cw=[TW*0.07, TW*0.22, TW*0.15, TW*0.07, TW*0.28, TW*0.21],
         extra_styles=extra_resumen,
     )
-    story += [resumen_t, SP(0.5), HR()]
+    story += [resumen_t, SP(0.1)]
+    story.append(P("B3 (altitud) es informativo y no pondera en el score final.", "small"))
+    story += [SP(0.35), HR()]
 
-    # ── 4 · SECCIÓN A · VALIDACIÓN GEOMÉTRICA ────────────────────────────────
+    # ── DOCUMENTACIÓN ADICIONAL REQUERIDA ─────────────────────────────────────
+    doc_items = []
+    if a1_nivel in ("naranja","amarillo"): doc_items.append(_DOC_REQ["A1_naranja"])
+    if a1_nivel == "rojo":                 doc_items.append(_DOC_REQ["A1_rojo"])
+    if a2_nivel == "amarillo":             doc_items.append(_DOC_REQ["A2_amarillo"])
+    if a2_nivel == "rojo":                 doc_items.append(_DOC_REQ["A2_rojo"])
+    if b1_nivel in ("amarillo","naranja"): doc_items.append(_DOC_REQ["B1_amarillo"])
+    if b1_nivel == "rojo":                 doc_items.append(_DOC_REQ["B1_rojo"])
+    if b2_nivel in ("amarillo","naranja"): doc_items.append(_DOC_REQ["B2_amarillo"])
+    if b2_nivel == "rojo":                 doc_items.append(_DOC_REQ["B2_rojo"])
+    if c_nivel in ("naranja","amarillo"):  doc_items.append(_DOC_REQ["C_naranja"])
+    if c_nivel == "rojo":                  doc_items.append(_DOC_REQ["C_rojo"])
+    if d_score is not None:
+        if 0.25 <= d_score < 0.50:         doc_items.append(_DOC_REQ["D_medio"])
+        if 0.50 <= d_score < 0.75:         doc_items.append(_DOC_REQ["D_alto"])
+        if d_score >= 0.75:                doc_items.append(_DOC_REQ["D_extremo"])
+
+    story.append(P("Documentación Adicional Requerida", "h2"))
+    if doc_items:
+        doc_rows = [[P("Ítem","th"), P("Requerimiento","th")]]
+        for i, itm in enumerate(doc_items):
+            doc_rows.append([P(str(i+1),"td_c"), P(itm,"td")])
+        doc_t = _tbl(doc_rows, cw=[TW*0.08, TW*0.92])
+        story.append(doc_t)
+    else:
+        story.append(P("✅ Ninguna documentación adicional requerida — todos los indicadores en verde.", "body"))
+    story += [SP(0.4)]
+
+    # ── APROBACIÓN Y FIRMAS ───────────────────────────────────────────────────
+    story.append(P("Aprobación y Firmas", "h2"))
+    firma_t = Table(
+        [
+            [P("<b>Analista de Crédito</b>","td_c"),
+             P("<b>Responsable de Riesgo</b>","td_c"),
+             P("<b>Gerente de Área</b>","td_c")],
+            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
+            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
+            [P("Nombre: ___________________","small"),
+             P("Nombre: ___________________","small"),
+             P("Nombre: ___________________","small")],
+            [P("Fecha:  ___________________","small"),
+             P("Fecha:  ___________________","small"),
+             P("Fecha:  ___________________","small")],
+        ],
+        colWidths=[TW/3]*3,
+        rowHeights=[0.5*cm, 0.4*cm, 1.4*cm, 0.45*cm, 0.45*cm],
+    )
+    firma_t.setStyle(TableStyle([
+        ("GRID",          (0,0), (-1,-1), 0.4, _hex(C.BORDER)),
+        ("BACKGROUND",    (0,0), (-1,0),  _hex(C.LIGHT)),
+        ("TOPPADDING",    (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("VALIGN",        (0,0), (-1,-1), "BOTTOM"),
+        ("LINEABOVE",     (0,2), (-1,2),  1.2, _hex(C.DARK)),
+    ]))
+    story += [firma_t]
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  PÁGINA 2+ · ANÁLISIS DETALLADO DE LOS INDICADORES
+    # ════════════════════════════════════════════════════════════════════════
+    story.append(PageBreak())
+    story.append(P("Análisis detallado de los indicadores", "h2"))
+    story.append(P("Desglose por bloque de validación. El resumen y la resolución "
+                   "consolidada figuran en la primera página.", "small"))
+    story.append(SP(0.2))
+
+    # ── A · VALIDACIÓN GEOMÉTRICA ────────────────────────────────────────────
     story.append(P("A · Validación Geométrica y Legal", "h2"))
 
     # A1 tabla de frontera
@@ -444,7 +508,6 @@ def _build_pdf(
         frows = [fhdr]
         for _, fr in front_rows_df.iterrows():
             is_cond = fr["tipo_condi"] != "Frontera Agrícola no condicionada"
-            bg = C.AMBER_BG if is_cond else C.GREEN_BG
             ps_tc = _sty("ftc", fontSize=8, textColor=_hex(C.AMBER if is_cond else C.GREEN))
             frows.append([
                 Paragraph(fr["tipo_condi"], ps_tc),
@@ -502,7 +565,7 @@ def _build_pdf(
     )
     story += [a2_t, SP(0.4), HR()]
 
-    # ── 5 · SECCIÓN B · CONTINUIDAD PRODUCTIVA ───────────────────────────────
+    # ── B · CONTINUIDAD PRODUCTIVA ───────────────────────────────────────────
     story.append(P("B · Validación de Continuidad Productiva", "h2"))
 
     # B1 aptitud
@@ -524,8 +587,6 @@ def _build_pdf(
     story.append(P("B2 · Actividad Productiva (NDVI histórico · Sentinel-2)", "h3"))
     if b2:
         b2_bg = _SEM_BG.get(b2_nivel, C.GREY_BG)
-        b2_fg = _SEM_FG.get(b2_nivel, C.DARK)
-        # KPI tabla
         b2_kpis = [
             ("Escenas activas",          f"{b2_pct:.0f}%"),
             ("Umbral escena",            f"≥ {b2_thr_s:.2f}"),
@@ -561,7 +622,6 @@ def _build_pdf(
             prows = [ph]
             for yr, val in sorted(peak_by_year.items()):
                 ok = val >= b2_thr_p
-                bg = C.GREEN_BG if ok else C.RED_BG
                 prows.append([
                     P(str(yr), "td_c"),
                     P(f"{val:.3f}", "td_c"),
@@ -578,9 +638,67 @@ def _build_pdf(
             story.append(peak_t)
     else:
         story.append(P("Actividad productiva NDVI no calculada.", "small"))
+    story.append(SP(0.3))
+
+    # B3 altitud
+    story.append(P("B3 · Altitud del Predio vs. Cultivo (informativo)", "h3"))
+    if b3_elev is not None:
+        b3_bg = _SEM_BG.get(b3_nivel, C.GREY_BG)
+        b3_rows = [
+            [P("Indicador","th"), P("Resultado","th")],
+            [P("Elevación media del predio","td"), P(f"{b3_elev:.0f} m","td")],
+            [P("Rango altitudinal del cultivo","td"),
+             P(f"{b3_alt_min}–{b3_alt_max} m" if b3_alt_min is not None else "—","td")],
+            [P("Resultado","td"),
+             P("Dentro del rango" if b3_nivel == "verde" else
+               "Fuera del rango" if b3_nivel == "rojo" else "—","td")],
+        ]
+        b3_t = _tbl(b3_rows, cw=[TW*0.5, TW*0.5],
+                    extra_styles=[("BACKGROUND",(0,3),(-1,3),_hex(b3_bg)),
+                                   ("FONTNAME",(0,3),(-1,3),"Helvetica-Bold")])
+        story.append(b3_t)
+    else:
+        story.append(P("Altitud no calculada (requiere análisis de terreno A2-A).", "small"))
     story += [SP(0.4), HR()]
 
-    # ── 6 · SECCIÓN D · RIESGO AGROCLIMÁTICO ─────────────────────────────────
+    # ── C · INFRAESTRUCTURA ──────────────────────────────────────────────────
+    story.append(P("C · Infraestructura Productiva", "h2"))
+    c1_dist = infra_cu.get("distancia_km", "—") if infra_cu else "—"
+    c1_nom  = infra_cu.get("nombre", "—")       if infra_cu else "—"
+    c1_dur  = infra_cu.get("duracion_min", "—")  if infra_cu else "—"
+    c3_dist = infra_cu.get("dist_recta_km", "—") if infra_cu else "—"
+    c2_dist = infra_via.get("distancia_m", "—")  if infra_via else "—"
+    c2_nom  = infra_via.get("nombre", "—")       if infra_via else "—"
+    c2_tipo = infra_via.get("tipo", "—")         if infra_via else "—"
+    c_rows  = [
+        [P("Indicador","th"), P("Resultado","th"), P("Umbral","th"), P("Score","th")],
+        [P("C1 · Centro urbano (por carretera)","td"),
+         P(f"{c1_dist} km · {c1_nom} ({c1_dur} min)", "td"),
+         P("< 10 km verde · 10–25 km amarillo · > 25 km rojo", "td_sm"),
+         P(_SEM_EMO.get(
+             "verde" if infra_cu and infra_cu.get("distancia_km",99) < 10 else
+             "naranja" if infra_cu and infra_cu.get("distancia_km",99) < 25 else "rojo",
+             "⚪"), "td_c")],
+        [P("C3 · Centro urbano (línea recta)","td"),
+         P(f"{c3_dist} km · {c1_nom}", "td"),
+         P("< 5 km verde · 5–15 km amarillo · > 15 km rojo", "td_sm"),
+         P(_SEM_EMO.get(
+             "verde" if infra_cu and infra_cu.get("dist_recta_km",99) < 5 else
+             "naranja" if infra_cu and infra_cu.get("dist_recta_km",99) < 15 else "rojo",
+             "⚪"), "td_c")],
+        [P("C2 · Vía transitable más cercana","td"),
+         P(f"{c2_dist} m · {c2_nom} ({c2_tipo})", "td"),
+         P("< 500 m verde · 500 m–2 km amarillo · > 2 km rojo", "td_sm"),
+         P(_SEM_EMO.get(
+             "verde" if infra_via and infra_via.get("distancia_m",9999) < 500 else
+             "naranja" if infra_via and infra_via.get("distancia_m",9999) < 2000 else "rojo",
+             "⚪"), "td_c")],
+    ]
+    c_t = _tbl(c_rows, cw=[TW*0.33, TW*0.37, TW*0.22, TW*0.08])
+    story += [c_t, P("Semáforo global C = peor de los tres indicadores.", "small"),
+              SP(0.4), HR()]
+
+    # ── D · RIESGO AGROCLIMÁTICO ─────────────────────────────────────────────
     story.append(P("D · Riesgo Agroclimático", "h2"))
     d_bg_g  = _SEM_BG.get(d_nivel, C.GREY_BG)
     d_fg_g  = _SEM_FG.get(d_nivel, C.DARK)
@@ -589,9 +707,10 @@ def _build_pdf(
     ps_dlbl   = _sty("dl2", fontSize=8.5, alignment=TA_CENTER,
                      textColor=_hex(d_fg_g))
     d_head_t  = Table(
-        [[Paragraph(f"{d_label}  |  Score P80: {d_score:.2f}" if d_score else d_label,
+        [[Paragraph(f"{d_label}  |  Score: {d_score:.2f}" if d_score else d_label,
                     ps_dscore)],
-         [Paragraph("Score global = media del peor indicador por categoría de riesgo", ps_dlbl)]],
+         [Paragraph("Score global = media del peor indicador por categoría de riesgo "
+                    "(año adverso: P80 curvas crecientes · P20 decrecientes)", ps_dlbl)]],
         colWidths=[TW],
     )
     d_head_t.setStyle(TableStyle([
@@ -603,13 +722,12 @@ def _build_pdf(
     story.append(SP(0.25))
 
     if df_risk is not None and not df_risk.empty:
-        # Top riesgo por categoría (solo score > 0)
         _COLOR_BG_D  = {
             "verde":"#d1fae5","amarillo":"#dcfce7","naranja":"#fef9c3",
             "rojo":"#fed7aa","granate":"#fee2e2","gris":"#f8fafc",
         }
-        dh = [P("Categoría","th"), P("Indicador (P80)","th"),
-              P("Valor medio","th"), P("Valor P80","th"), P("Score","th")]
+        dh = [P("Categoría","th"), P("Indicador","th"),
+              P("Valor medio","th"), P("Valor adverso","th"), P("Score","th")]
         drows_html = [dh]
         for cat in df_risk["Categoría_riesgo"].unique():
             df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
@@ -618,16 +736,17 @@ def _build_pdf(
             if score_v is None or score_v < 0.05:
                 continue
             color = worst.get("riesgo_color", "gris")
-            bg = _COLOR_BG_D.get(color, C.GREY_BG)
             ps_cat = _sty("dcat", fontSize=8, fontName="Helvetica-Bold",
                           textColor=_hex(_SEM_FG.get(
                               "verde" if color in ("verde","amarillo") else
                               "amarillo" if color == "naranja" else "rojo", C.DARK)))
+            _pct_ref = worst.get("percentil_ref", 80)
+            _pmark   = " (P20)" if int(_pct_ref) == 20 else ""
             drows_html.append([
                 Paragraph(cat, ps_cat),
                 P(str(worst.get("Nombre_indicador","—")), "td"),
                 P(f"{worst.get('valor_medio',0):.1f} {worst.get('Unidad','')}", "td_c"),
-                P(f"{worst.get('valor_p80',0):.1f} {worst.get('Unidad','')}", "td_c"),
+                P(f"{worst.get('valor_p80',0):.1f} {worst.get('Unidad','')}{_pmark}", "td_c"),
                 P(f"{score_v:.2f}", "td_c"),
             ])
         if len(drows_html) > 1:
@@ -658,94 +777,7 @@ def _build_pdf(
 
     story += [SP(0.4), HR()]
 
-    # ── 7 · SECCIÓN C · INFRAESTRUCTURA + APTITUD ────────────────────────────
-    story.append(P("C · Infraestructura Productiva", "h2"))
-    c1_dist = infra_cu.get("distancia_km", "—") if infra_cu else "—"
-    c1_nom  = infra_cu.get("nombre", "—")       if infra_cu else "—"
-    c1_dur  = infra_cu.get("duracion_min", "—")  if infra_cu else "—"
-    c2_dist = infra_via.get("distancia_m", "—")  if infra_via else "—"
-    c2_nom  = infra_via.get("nombre", "—")       if infra_via else "—"
-    c2_tipo = infra_via.get("tipo", "—")         if infra_via else "—"
-    c_rows  = [
-        [P("Indicador","th"), P("Resultado","th"), P("Umbral","th"), P("Score","th")],
-        [P("Distancia al centro urbano más cercano","td"),
-         P(f"{c1_dist} km por carretera · {c1_nom} ({c1_dur} min)", "td"),
-         P("< 10 km verde · 10–25 km amarillo · > 25 km rojo", "td_sm"),
-         P(_SEM_EMO.get(
-             "verde" if infra_cu and infra_cu.get("distancia_km",99) < 10 else
-             "naranja" if infra_cu and infra_cu.get("distancia_km",99) < 25 else "rojo",
-             "⚪"), "td_c")],
-        [P("Distancia a vía transitable más cercana","td"),
-         P(f"{c2_dist} m · {c2_nom} ({c2_tipo})", "td"),
-         P("< 500 m verde · 500 m–2 km amarillo · > 2 km rojo", "td_sm"),
-         P(_SEM_EMO.get(
-             "verde" if infra_via and infra_via.get("distancia_m",9999) < 500 else
-             "naranja" if infra_via and infra_via.get("distancia_m",9999) < 2000 else "rojo",
-             "⚪"), "td_c")],
-    ]
-    c_t = _tbl(c_rows, cw=[TW*0.35, TW*0.35, TW*0.22, TW*0.08])
-    story += [c_t, SP(0.4), HR()]
-
-    # ── 8 · DOCUMENTACIÓN ADICIONAL REQUERIDA ────────────────────────────────
-    doc_items = []
-    if a1_nivel in ("naranja","amarillo"): doc_items.append(_DOC_REQ["A1_naranja"])
-    if a1_nivel == "rojo":                 doc_items.append(_DOC_REQ["A1_rojo"])
-    if a2_nivel == "amarillo":             doc_items.append(_DOC_REQ["A2_amarillo"])
-    if a2_nivel == "rojo":                 doc_items.append(_DOC_REQ["A2_rojo"])
-    if b1_nivel in ("amarillo","naranja"): doc_items.append(_DOC_REQ["B1_amarillo"])
-    if b1_nivel == "rojo":                 doc_items.append(_DOC_REQ["B1_rojo"])
-    if b2_nivel in ("amarillo","naranja"): doc_items.append(_DOC_REQ["B2_amarillo"])
-    if b2_nivel == "rojo":                 doc_items.append(_DOC_REQ["B2_rojo"])
-    if c_nivel in ("naranja","amarillo"):  doc_items.append(_DOC_REQ["C_naranja"])
-    if c_nivel == "rojo":                  doc_items.append(_DOC_REQ["C_rojo"])
-    if d_score is not None:
-        if 0.25 <= d_score < 0.50:         doc_items.append(_DOC_REQ["D_medio"])
-        if 0.50 <= d_score < 0.75:         doc_items.append(_DOC_REQ["D_alto"])
-        if d_score >= 0.75:                doc_items.append(_DOC_REQ["D_extremo"])
-
-    story.append(P("Documentación Adicional Requerida", "h2"))
-    if doc_items:
-        doc_rows = [[P("Ítem","th"), P("Requerimiento","th")]]
-        for i, itm in enumerate(doc_items):
-            bg = C.AMBER_BG if _worst in ("naranja","amarillo") else C.RED_BG
-            doc_rows.append([P(str(i+1),"td_c"), P(itm,"td")])
-        doc_t = _tbl(doc_rows, cw=[TW*0.08, TW*0.92])
-        story.append(doc_t)
-    else:
-        story.append(P("✅ Ninguna documentación adicional requerida — todos los indicadores en verde.", "body"))
-
-    story += [SP(0.5), HR()]
-
-    # ── 9 · FIRMAS ────────────────────────────────────────────────────────────
-    story.append(P("Aprobación y Firmas", "h2"))
-    firma_t = Table(
-        [
-            [P("<b>Analista de Crédito</b>","td_c"),
-             P("<b>Responsable de Riesgo</b>","td_c"),
-             P("<b>Gerente de Área</b>","td_c")],
-            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
-            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
-            [P("Nombre: ___________________","small"),
-             P("Nombre: ___________________","small"),
-             P("Nombre: ___________________","small")],
-            [P("Fecha:  ___________________","small"),
-             P("Fecha:  ___________________","small"),
-             P("Fecha:  ___________________","small")],
-        ],
-        colWidths=[TW/3]*3,
-        rowHeights=[0.5*cm, 0.4*cm, 1.4*cm, 0.45*cm, 0.45*cm],
-    )
-    firma_t.setStyle(TableStyle([
-        ("GRID",          (0,0), (-1,-1), 0.4, _hex(C.BORDER)),
-        ("BACKGROUND",    (0,0), (-1,0),  _hex(C.LIGHT)),
-        ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-        ("VALIGN",        (0,0), (-1,-1), "BOTTOM"),
-        ("LINEABOVE",     (0,2), (-1,2),  1.2, _hex(C.DARK)),
-    ]))
-    story += [firma_t, SP(0.4)]
-
-    # ── 10 · NOTA LEGAL ───────────────────────────────────────────────────────
+    # ── NOTA LEGAL ────────────────────────────────────────────────────────────
     story.append(P(
         "Este reporte es generado automáticamente por AgroCredito a partir de datos satelitales, "
         "catastrales y climáticos de acceso público. No constituye dictamen definitivo. "
@@ -777,7 +809,7 @@ def generate_exante_report(
     Args:
         datos:    dict del caso de estudio (variables de display / clima)
         predio:   dict devuelto por get_predio_por_punto
-        analisis: dict con resultados calculados (A1, A2, B1, B2, C, D, áreas)
+        analisis: dict con resultados calculados (existencia, A1, A2, B1, B2, B3, C, D, áreas)
         fmt:      "pdf" (otros formatos en versión futura)
 
     Returns:
