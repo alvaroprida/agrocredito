@@ -823,14 +823,15 @@ with tab_inicio:
         c1, c2 = st.columns(2)
         with c1: _lat_in = st.number_input("Latitud (centro del mapa)",  value=5.07013,  format="%.6f", key="in_lat_dr")
         with c2: _lon_in = st.number_input("Longitud (centro del mapa)", value=-73.55157, format="%.6f", key="in_lon_dr")
-        st.caption("Centra el mapa con las coordenadas, dibuja el polígono (herramienta ▭ / ⬠) y pulsa Analizar.")
+        st.caption("Centra el mapa con las coordenadas, dibuja el polígono haciendo "
+                   "clic en sus vértices (herramienta de polígono ⬠) y pulsa Analizar.")
         _md = folium.Map(location=[_lat_in, _lon_in], zoom_start=16, tiles="Esri.WorldImagery")
         Fullscreen().add_to(_md)
         folium.Marker([_lat_in, _lon_in], tooltip="Centro",
                       icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(_md)
         Draw(export=False,
              draw_options={"polyline": False, "circle": False, "circlemarker": False,
-                           "marker": False, "polygon": True, "rectangle": True},
+                           "marker": False, "rectangle": False, "polygon": True},
              edit_options={"edit": True, "remove": True}).add_to(_md)
         _out = st_folium(_md, width=750, height=480, key="draw_map",
                          returned_objects=["last_active_drawing"])
@@ -923,11 +924,18 @@ with tab_inicio:
             # Existencia: ¿el punto/centroide cae dentro del catastro?
             _ex_txt = st.session_state.get("existencia_texto",
                                            "Polígono catastral identificado")
+            try:
+                _cen = predio["gdf"].geometry.iloc[0].centroid
+                _cen_str = f"  ·  Coordenadas centroide: [{_cen.y:.5f}, {_cen.x:.5f}]"
+            except Exception:
+                _cen_str = ""
             if _en_cat:
-                st.success(f"✅ Existencia · {_ex_txt} (Depto: {predio.get('departamento','—')}).")
+                st.success(
+                    f"✅ Existencia · {_ex_txt} (Depto: {predio.get('departamento','—')}).{_cen_str}"
+                )
             else:
                 st.warning(
-                    f"⚠️ Existencia · {_ex_txt}. El análisis se ejecutará sobre el "
+                    f"⚠️ Existencia · {_ex_txt}.{_cen_str} El análisis se ejecutará sobre el "
                     "polígono definido, pero el predio no figura en el catastro."
                 )
 
@@ -2808,23 +2816,13 @@ with tab_validacion:
             "rojo":     '<span style="background:#fee2e2;color:#7f1d1d;border-radius:4px;padding:1px 7px;font-size:0.78rem">🔴 No confirmado</span>',
         }
 
-        import json as _json
-        _geo = _json.dumps(
-            predio["gdf"].to_crs("EPSG:4326").geometry.iloc[0].__geo_interface__
-        )
-        if st.button("🔄 Calcular actividad productiva (NDVI)", type="primary", key="btn_b2"):
-            st.session_state["b2_result"] = None
-            with st.spinner("Descargando serie NDVI histórica (GEE · 3 años)…"):
-                try:
-                    st.session_state["b2_result"] = _get_b2_cached(_geo, cultivo)
-                except Exception as _e:
-                    st.error(f"❌ No se pudo obtener la serie NDVI: {_e}")
-
+        # B2 se calcula automáticamente al entrar a Validación Pre-Crédito.
         b2     = st.session_state.get("b2_result")
         b2_ok  = b2 is not None
         if not b2_ok:
-            st.info("Pulsa **Calcular actividad productiva** para descargar la serie NDVI. "
-                    "El resultado queda en caché 24 h.")
+            st.info("La serie NDVI de actividad productiva se calcula automáticamente "
+                    "al abrir esta pestaña. Si no aparece, vuelve a **Inicio** y "
+                    "relanza el análisis del predio.")
 
         if b2_ok:
             s        = b2["semaforo"]
