@@ -856,6 +856,8 @@ with tab_monitoreo:
                 st.error(f"Columnas faltantes: {', '.join(_missing)}")
                 _portfolio = PORTFOLIO_DEFAULT
             else:
+                # El template usa latitud/longitud; el resto del código usa lat/lon
+                _df_port = _df_port.rename(columns={"latitud": "lat", "longitud": "lon"})
                 _portfolio = _df_port.fillna("").to_dict("records")
                 st.success(f"Portafolio cargado: {len(_portfolio)} predios")
         except Exception as _e:
