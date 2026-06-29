@@ -886,6 +886,15 @@ with tab_inicio:
 
         st.session_state["analizado"] = True
         st.session_state["predio"]    = _predio
+        # Invalidar cualquier análisis previo: al (re)definir el predio en Inicio,
+        # Validación Pre-Crédito debe recalcular sobre la última lat/lon definida.
+        for _k_inv in ["terrain","ndvi_result","ndvi_low_mask","area_ef_result",
+                       "area_ef_computed","b2_result","gdf_frontera","gdf_aptitud",
+                       "gdf_construcciones","a2_nivel","area_pendiente_excluida_ha",
+                       "area_ndvi_bajo_ha","area_construcciones_ha","poly_pendiente",
+                       "poly_ndvi","poly_const","b3_nivel","b3_elev","b3_alt_min",
+                       "b3_alt_max","auto_analysis_for"]:
+            st.session_state.pop(_k_inv, None)
         if _predio is not None:
             _en_cat = _predio.get("en_catastro", False)
             _ex_txt = (("Polígono catastral identificado" if _metodo == _M_PUNTO
@@ -3448,9 +3457,13 @@ with tab_validacion:
     _gdf_front = st.session_state.get("gdf_frontera")
     _apt_res   = apt_result if "apt_result" in dir() else None
 
-    # A1: Existencia del predio (always verde if we are in this tab)
+    # A1: Existencia del predio — refleja si el punto/centroide cae en el catastro
     _sem_a1 = st.session_state.get("a1_nivel", "verde")
-    _res_a1 = "Polígono catastral identificado"
+    _res_a1 = st.session_state.get(
+        "existencia_texto",
+        "Polígono catastral identificado" if _sem_a1 == "verde"
+        else "Centroide fuera del catastro · polígono definido manualmente",
+    )
 
     # A2: Frontera agrícola
     _sem_a2 = st.session_state.get("a2_nivel", "gris")
@@ -3466,7 +3479,7 @@ with tab_validacion:
         else:
             _res_a2 = "Todo en Frontera Agrícola no condicionada"
     else:
-        _res_a2 = "—"
+        _res_a2 = "Sin información de frontera agrícola para este predio"
 
     # A3: Área Efectiva Cultivable
     _a3r    = st.session_state.get("area_ef_result", {})
