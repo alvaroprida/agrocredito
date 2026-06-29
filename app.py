@@ -756,6 +756,9 @@ with tab_inicio:
             "analizado": True,
             "datos": {**CASOS_ESTUDIO[caso_m], "lat": lat_input, "lon": lon_input},
         })
+        # La consulta del polígono catastral se hace SOLO al pulsar el botón.
+        with st.spinner("Consultando base catastral..."):
+            st.session_state["predio"] = get_predio_por_punto(lat_input, lon_input)
 
     st.markdown("---")
     if not st.session_state.get("analizado"):
@@ -764,15 +767,11 @@ with tab_inicio:
         lat     = st.session_state["lat"]
         lon     = st.session_state["lon"]
         cultivo = st.session_state.get("cultivo","café")
-
-        with st.spinner("Consultando base catastral..."):
-            predio = get_predio_por_punto(lat, lon)
+        predio  = st.session_state.get("predio")   # ya consultado al pulsar el botón
 
         if predio is None:
             st.warning("No se encontró ningún predio en las coordenadas indicadas.")
         else:
-            st.session_state["predio"] = predio
-
             st.markdown("#### 🗺️ Identificación del predio catastral")
             c1,c2,c3,c4 = st.columns(4)
             with c1: st.metric("Código catastral", predio["codigo"])
@@ -3390,10 +3389,9 @@ with tab_validacion:
         pct_a = b2.get("pct_active", 0)
         return 1 if pct_a > 40 else 2 if pct_a > 20 else 3
 
-    def _sub_infra(col_cu, col_via):
-        _rank = {"verde": 0, "naranja": 1, "rojo": 2}
-        worst = max([col_cu, col_via], key=lambda c: _rank.get(c, 0))
-        return {"verde": 1, "naranja": 2, "rojo": 3}.get(worst, None)
+    def _sub_infra(nivel_global):
+        # nivel_global = peor de C1, C2 y C3 (calculado en la sección C)
+        return {"verde": 1, "naranja": 2, "rojo": 3}.get(nivel_global, None)
 
     def _sub_d(agg):
         if agg is None: return None
@@ -3409,7 +3407,7 @@ with tab_validacion:
         "apt":    (0.15, _sub_aptitud(_apt_score if _apt_res and not _apt_res.get("error") else None)),
         "ndvi":   (0.15, _sub_ndvi(_b2_sum)),
         "b3":     (0.00, _sub_b3(_sem_b3)),   # B3 informativo, no entra en pesos actuales
-        "infra":  (0.15, _sub_infra(_color_cu, _color_via)),
+        "infra":  (0.15, _sub_infra(_color_global if "_color_global" in dir() else "gris")),
         "d":      (0.15, _sub_d(_d_agg_val)),
     }
 
@@ -3443,6 +3441,45 @@ with tab_validacion:
         )
         st.session_state["score_final"]    = _score_final
         st.session_state["decision_final"] = _dec_label
+
+        # ── Desglose del score (transparencia / diagnóstico) ──────────
+        with st.expander("🔎 Desglose del score ponderado", expanded=False):
+            _BLK_LABEL = {
+                "exist": "Existencia del predio", "front": "A1 · Frontera agrícola",
+                "area":  "A2 · Área efectiva",    "apt":   "B1 · Aptitud al cultivo",
+                "ndvi":  "B2 · Actividad NDVI",   "b3":    "B3 · Altitud (informativo)",
+                "infra": "C · Infraestructura",   "d":     "D · Riesgo agroclimático",
+            }
+            _rows_bd = ""
+            for _k, (_p, _v) in _SCORES_CALC.items():
+                _vs   = "—" if _v is None else str(_v)
+                _contrib = "—" if (_v is None or _p == 0) else f"{_p*_v:.2f}"
+                _peso_s  = f"{_p*100:.0f}%"
+                _estado  = "no calculado" if _v is None else ""
+                _rows_bd += (
+                    f'<tr><td style="padding:4px 8px">{_BLK_LABEL.get(_k,_k)}</td>'
+                    f'<td style="padding:4px 8px;text-align:center">{_peso_s}</td>'
+                    f'<td style="padding:4px 8px;text-align:center">{_vs}</td>'
+                    f'<td style="padding:4px 8px;text-align:center">{_contrib}</td>'
+                    f'<td style="padding:4px 8px;color:#94a3b8;font-size:0.78rem">{_estado}</td></tr>'
+                )
+            st.markdown(
+                '<table style="width:100%;border-collapse:collapse;font-size:0.84rem">'
+                '<thead><tr style="background:#f1f5f9;font-weight:600">'
+                '<td style="padding:4px 8px">Bloque</td>'
+                '<td style="padding:4px 8px;text-align:center">Peso</td>'
+                '<td style="padding:4px 8px;text-align:center">Sub-score (1–4)</td>'
+                '<td style="padding:4px 8px;text-align:center">Aporte (peso×score)</td>'
+                '<td style="padding:4px 8px"></td></tr></thead>'
+                f'<tbody>{_rows_bd}</tbody></table>',
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                f"Score ponderado = Σ(aporte) / Σ(pesos calculados) = "
+                f"{_score_sum:.3f} / {_peso_total:.2f} = {_score_sum/_peso_total:.3f} "
+                f"→ redondeado a **{_score_final}**. Los bloques 'no calculado' "
+                "no entran y su peso se redistribuye entre los disponibles."
+            )
     else:
         st.info("⚙️ Calcula los indicadores del análisis para obtener el score final consolidado.")
 
