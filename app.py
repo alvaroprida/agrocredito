@@ -826,7 +826,7 @@ with tab_monitoreo:
             uploaded_port = st.file_uploader(
                 "Cargar portafolio (Excel)",
                 type=["xlsx"],
-                help="Columnas requeridas: nombre_predio · latitud · longitud · cultivo · fecha_desembolso (opcional)",
+                help="Columnas requeridas: nombre_predio · latitud · longitud · cultivo",
                 key="portfolio_upload",
             )
         with col_dl:
@@ -835,7 +835,7 @@ with tab_monitoreo:
             _tmpl_df = (
                 pd.DataFrame(PORTFOLIO_DEFAULT)
                 .rename(columns={"lat": "latitud", "lon": "longitud"})
-                [["nombre_predio", "latitud", "longitud", "cultivo", "fecha_desembolso"]]
+                [["nombre_predio", "latitud", "longitud", "cultivo"]]
             )
             _tmpl_df.to_excel(_tmpl_buf, index=False)
             st.download_button(
