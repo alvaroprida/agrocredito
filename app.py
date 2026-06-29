@@ -1708,7 +1708,7 @@ proporcionalmente entre los bloques disponibles.
 | Frontera A1 | 🟢 No condicionada | 🟡 Condicionada | — | 🔴 Fuera de frontera |
 | Área A2 | ≥ 70 % efectiva | 40–70 % | — | < 40 % |
 | Aptitud B1 | Score ≥ 0.70 | 0.40–0.69 | < 0.40 | — |
-| NDVI B2 | > 40 % escenas activas | 20–40 % | < 20 % | — |
+| NDVI B2 | ≥ 40 % escenas activas | 20–40 % | < 20 % | — |
 | Infraestructura C | 🟢 Acceso adecuado | 🟡 Acceso medio | 🔴 Acceso bajo | — |
 | Riesgo D | Score P80 < 0.25 | 0.25–0.50 | 0.50–0.75 | ≥ 0.75 |
 
@@ -3426,7 +3426,8 @@ with tab_validacion:
     def _sub_ndvi(b2):
         if b2 is None: return None
         pct_a = b2.get("pct_active", 0)
-        return 1 if pct_a > 40 else 2 if pct_a > 20 else 3
+        # Alineado con el semáforo B2 y la metodología: ≥40 verde · 20–40 amarillo · <20 rojo
+        return 1 if pct_a >= 40 else 2 if pct_a >= 20 else 3
 
     def _sub_infra(nivel_global):
         # nivel_global = peor de C1, C2 y C3 (calculado en la sección C)
