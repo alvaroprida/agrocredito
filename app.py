@@ -1180,9 +1180,9 @@ with tab_monitoreo:
                                 f'→ {_ind.get("action","")}</div></div>',
                                 unsafe_allow_html=True,
                             )
-        # ── Alerta Global del Predio ──────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 🎯 Alerta Global del Predio")
+        # ── Alerta Global del Predio (subsección dentro de Detalle por Predio) ─────
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+        st.markdown(f"#### 🎯 Alerta Global · {_sel_name}")
 
         _ndv_sem_g = (
             max([_sel_ndv.get("a1_sem", "verde"), _sel_ndv.get("a2_sem", "verde")],
