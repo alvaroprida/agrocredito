@@ -86,6 +86,46 @@ _RESOLUCION = {
 
 MESES_ES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
+_CLIMA_FIG_W, _CLIMA_FIG_H = 7.4, 2.4   # pulgadas (relación de aspecto del gráfico)
+
+
+def _clima_chart_png(meses, precip, tmax, tmin):
+    """Genera el gráfico de serie climática mensual (precip. en barras +
+    temperatura máx/mín en líneas) como PNG en memoria, igual que en D1."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n  = len(meses)
+    pr = [float(precip[i]) if i < len(precip) else 0.0 for i in range(n)]
+    tx = [float(tmax[i])   if i < len(tmax)   else None for i in range(n)]
+    tn = [float(tmin[i])   if i < len(tmin)   else None for i in range(n)]
+    x  = list(range(n))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(_CLIMA_FIG_W, _CLIMA_FIG_H), dpi=150)
+
+    ax1.bar(x, pr, color="#3b82f6", width=0.7)
+    ax1.set_title("Precipitación media mensual (mm)", fontsize=9)
+    ax1.set_xticks(x); ax1.set_xticklabels(meses, fontsize=7)
+    ax1.tick_params(axis="y", labelsize=7)
+    ax1.grid(axis="y", alpha=0.3)
+
+    ax2.plot(x, tx, color="#ef4444", marker="o", ms=2.5, lw=1.5, label="T máx")
+    ax2.plot(x, tn, color="#3b82f6", marker="o", ms=2.5, lw=1.5, label="T mín")
+    ax2.fill_between(x, tn, tx, color="#3b82f6", alpha=0.08)
+    ax2.set_title("Temperatura mensual (°C)", fontsize=9)
+    ax2.set_xticks(x); ax2.set_xticklabels(meses, fontsize=7)
+    ax2.tick_params(axis="y", labelsize=7)
+    ax2.legend(fontsize=7, loc="best")
+    ax2.grid(axis="y", alpha=0.3)
+
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PDF ENGINE
@@ -102,7 +142,7 @@ def _build_pdf(
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable, KeepTogether, PageBreak,
+        HRFlowable, KeepTogether, PageBreak, Image as RLImage,
     )
 
     an = analisis or {}
@@ -222,15 +262,16 @@ def _build_pdf(
     a1_nivel   = an.get("a1_nivel", "gris")
     gdf_front  = an.get("gdf_frontera")
 
-    # A2 areas
-    area_ef    = float(an.get("area_ef",   datos.get("area_efectiva_ha",   0)) or 0)
-    pct_ef     = float(an.get("pct_ef",    round(area_ef/max(area_tot,1)*100, 1)))
-    area_pend  = float(an.get("area_pend", datos.get("area_pendiente_excluida_ha", 0)) or 0)
-    area_ndvi  = float(an.get("area_ndvi", datos.get("area_ndvi_bajo_ha", 0)) or 0)
-    area_const = float(an.get("area_const",datos.get("area_construcciones_ha", 0)) or 0)
-    slope_thr  = an.get("slope_thr", 25)
-    ndvi_thr   = an.get("ndvi_thr",  0.25)
-    a2_nivel   = ("verde" if pct_ef >= 70 else "amarillo" if pct_ef >= 40 else "rojo")
+    # A2 areas — a2_computed=False si el usuario no lanzó el cálculo en la app
+    _area_ef_raw = an.get("area_ef", datos.get("area_efectiva_ha"))
+    a2_computed  = _area_ef_raw is not None
+    area_ef    = float(_area_ef_raw or 0)
+    pct_ef     = float(an.get("pct_ef") if an.get("pct_ef") is not None
+                       else round(area_ef/max(area_tot,1)*100, 1))
+    area_no_cult = float(an.get("area_no_cultivable",
+                                max(area_tot - area_ef, 0.0)) or 0)
+    a2_nivel   = ("verde" if pct_ef >= 70 else "amarillo" if pct_ef >= 40 else "rojo") \
+                 if a2_computed else "gris"
 
     # B1 aptitud
     apt_res    = an.get("apt_result")
@@ -449,13 +490,14 @@ def _build_pdf(
     story += [SP(0.22)]
 
     # ── APROBACIÓN Y FIRMAS ───────────────────────────────────────────────────
+    # Bloque de firma limpio: sin rejilla; solo la línea base de firma bajo el
+    # espacio en blanco de cada columna.
     firma_t = Table(
         [
             [P("<b>Analista de Crédito</b>","td_c"),
              P("<b>Responsable de Riesgo</b>","td_c"),
              P("<b>Gerente de Área</b>","td_c")],
-            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
-            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
+            [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],          # espacio para firmar
             [P("Nombre: ___________________","small"),
              P("Nombre: ___________________","small"),
              P("Nombre: ___________________","small")],
@@ -464,15 +506,21 @@ def _build_pdf(
              P("Fecha:  ___________________","small")],
         ],
         colWidths=[TW/3]*3,
-        rowHeights=[0.42*cm, 0.28*cm, 0.85*cm, 0.38*cm, 0.38*cm],
+        rowHeights=[0.5*cm, 1.0*cm, 0.4*cm, 0.4*cm],
     )
     firma_t.setStyle(TableStyle([
-        ("GRID",          (0,0), (-1,-1), 0.4, _hex(C.BORDER)),
         ("BACKGROUND",    (0,0), (-1,0),  _hex(C.LIGHT)),
         ("TOPPADDING",    (0,0), (-1,-1), 3),
         ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-        ("VALIGN",        (0,0), (-1,-1), "BOTTOM"),
-        ("LINEABOVE",     (0,2), (-1,2),  1.2, _hex(C.DARK)),
+        ("LEFTPADDING",   (0,0), (-1,-1), 8),
+        ("RIGHTPADDING",  (0,0), (-1,-1), 8),
+        ("VALIGN",        (0,0), (-1,0),  "MIDDLE"),
+        ("VALIGN",        (0,1), (-1,-1), "BOTTOM"),
+        ("ALIGN",         (0,0), (-1,0),  "CENTER"),
+        # Línea base de firma bajo el espacio en blanco (una por columna)
+        ("LINEBELOW",     (0,1), (0,1),   0.8, _hex(C.DARK)),
+        ("LINEBELOW",     (1,1), (1,1),   0.8, _hex(C.DARK)),
+        ("LINEBELOW",     (2,1), (2,1),   0.8, _hex(C.DARK)),
     ]))
     # KeepTogether evita que el título y la tabla de firmas se partan entre páginas
     story += [KeepTogether([P("Aprobación y Firmas", "h2"), firma_t])]
@@ -523,42 +571,35 @@ def _build_pdf(
         story.append(P("Sin datos de frontera agrícola calculados.", "small"))
     story.append(SP(0.3))
 
-    # A2 desglose de áreas
+    # A2 desglose de áreas — misma tabla que la tab Validación Pre-Crédito:
+    # Área total · − Área no cultivable (unión A2A+A2B+A2C) · = Área efectiva.
     story.append(P("A2 · Área Efectiva Cultivable — Desglose", "h3"))
-    solapamiento = round(area_pend + area_ndvi + area_const - (area_tot - area_ef), 3)
-    solapamiento = max(solapamiento, 0.0)
-    a2_rows = [
-        [P("Componente","th"), P("Hectáreas","th"), P("% del predio","th")],
-        [P("Área total del predio","td"),
-         P(f"{area_tot:.4f}","td_c"), P("100.0%","td_c")],
-        [P(f"− Pendiente > {slope_thr}% (A2-A)","td"),
-         P(f"−{area_pend:.4f}","td_c"),
-         P(f"{area_pend/max(area_tot,1)*100:.1f}%","td_c")],
-        [P(f"− NDVI P25 < {ndvi_thr:.2f} (A2-C)","td"),
-         P(f"−{area_ndvi:.4f}","td_c"),
-         P(f"{area_ndvi/max(area_tot,1)*100:.1f}%","td_c")],
-        [P("− Construcciones (A2-B)","td"),
-         P(f"−{area_const:.4f}","td_c"),
-         P(f"{area_const/max(area_tot,1)*100:.1f}%","td_c")],
-        [P(f"  ↳ Solapamiento evitado","td_sm"),
-         P(f"+{solapamiento:.4f}","td_c"),
-         P(f"+{solapamiento/max(area_tot,1)*100:.1f}%","td_c")],
-        [P("✅ Área efectiva cultivable","td"),
-         P(f"{area_ef:.4f}","td_c"),
-         P(f"{pct_ef:.1f}%","td_c")],
-    ]
-    a2_bg = _SEM_BG.get(a2_nivel, C.GREY_BG)
-    a2_t = _tbl(
-        a2_rows,
-        cw=[TW*0.65, TW*0.18, TW*0.17],
-        extra_styles=[
-            ("BACKGROUND",  (0, 6), (-1, 6), _hex(a2_bg)),
-            ("FONTNAME",    (0, 6), (-1, 6), "Helvetica-Bold"),
-            ("FONTNAME",    (0, 5), (-1, 5), "Helvetica-Oblique"),
-            ("TEXTCOLOR",   (0, 5), (-1, 5), _hex(C.SUBTEXT)),
-        ],
-    )
-    story += [a2_t, SP(0.4), HR()]
+    if not a2_computed:
+        story.append(P("Área efectiva no calculada en la app.", "small"))
+    else:
+        _pct_no_cult = area_no_cult / max(area_tot, 1) * 100
+        a2_rows = [
+            [P("Componente","th"), P("Hectáreas","th"), P("% del predio","th")],
+            [P("Área total del predio","td"),
+             P(f"{area_tot:.4f}","td_c"), P("100.0%","td_c")],
+            [P("− Área no cultivable (unión de A2A + A2B + A2C)","td"),
+             P(f"−{area_no_cult:.4f}","td_c"),
+             P(f"{_pct_no_cult:.1f}%","td_c")],
+            [P("✅ Área efectiva cultivable","td"),
+             P(f"{area_ef:.4f}","td_c"),
+             P(f"{pct_ef:.1f}%","td_c")],
+        ]
+        a2_bg = _SEM_BG.get(a2_nivel, C.GREY_BG)
+        a2_t = _tbl(
+            a2_rows,
+            cw=[TW*0.65, TW*0.18, TW*0.17],
+            extra_styles=[
+                ("BACKGROUND",  (0, 3), (-1, 3), _hex(a2_bg)),
+                ("FONTNAME",    (0, 3), (-1, 3), "Helvetica-Bold"),
+            ],
+        )
+        story.append(a2_t)
+    story += [SP(0.4), HR()]
 
     # ── B · CONTINUIDAD PRODUCTIVA ───────────────────────────────────────────
     story.append(P("B · Validación de Continuidad Productiva", "h2"))
@@ -665,31 +706,36 @@ def _build_pdf(
     c2_dist = infra_via.get("distancia_m", "—")  if infra_via else "—"
     c2_nom  = infra_via.get("nombre", "—")       if infra_via else "—"
     c2_tipo = infra_via.get("tipo", "—")         if infra_via else "—"
+    _c1n = ("verde" if infra_cu and infra_cu.get("distancia_km",99) < 10 else
+            "naranja" if infra_cu and infra_cu.get("distancia_km",99) < 25 else
+            "rojo" if infra_cu else "gris")
+    _c3n = ("verde" if infra_cu and infra_cu.get("dist_recta_km",99) < 5 else
+            "naranja" if infra_cu and infra_cu.get("dist_recta_km",99) < 15 else
+            "rojo" if infra_cu else "gris")
+    _c2n = ("verde" if infra_via and infra_via.get("distancia_m",9999) < 500 else
+            "naranja" if infra_via and infra_via.get("distancia_m",9999) < 2000 else
+            "rojo" if infra_via else "gris")
     c_rows  = [
         [P("Indicador","th"), P("Resultado","th"), P("Umbral","th"), P("Score","th")],
         [P("C1 · Centro urbano (por carretera)","td"),
          P(f"{c1_dist} km · {c1_nom} ({c1_dur} min)", "td"),
          P("< 10 km verde · 10–25 km amarillo · > 25 km rojo", "td_sm"),
-         P(_SEM_EMO.get(
-             "verde" if infra_cu and infra_cu.get("distancia_km",99) < 10 else
-             "naranja" if infra_cu and infra_cu.get("distancia_km",99) < 25 else "rojo",
-             "⚪"), "td_c")],
+         P(_SEM_EMO.get(_c1n, "⚪"), "td_c")],
         [P("C3 · Centro urbano (línea recta)","td"),
          P(f"{c3_dist} km · {c1_nom}", "td"),
          P("< 5 km verde · 5–15 km amarillo · > 15 km rojo", "td_sm"),
-         P(_SEM_EMO.get(
-             "verde" if infra_cu and infra_cu.get("dist_recta_km",99) < 5 else
-             "naranja" if infra_cu and infra_cu.get("dist_recta_km",99) < 15 else "rojo",
-             "⚪"), "td_c")],
+         P(_SEM_EMO.get(_c3n, "⚪"), "td_c")],
         [P("C2 · Vía transitable más cercana","td"),
          P(f"{c2_dist} m · {c2_nom} ({c2_tipo})", "td"),
          P("< 500 m verde · 500 m–2 km amarillo · > 2 km rojo", "td_sm"),
-         P(_SEM_EMO.get(
-             "verde" if infra_via and infra_via.get("distancia_m",9999) < 500 else
-             "naranja" if infra_via and infra_via.get("distancia_m",9999) < 2000 else "rojo",
-             "⚪"), "td_c")],
+         P(_SEM_EMO.get(_c2n, "⚪"), "td_c")],
     ]
-    c_t = _tbl(c_rows, cw=[TW*0.33, TW*0.37, TW*0.22, TW*0.08])
+    c_t = _tbl(c_rows, cw=[TW*0.33, TW*0.37, TW*0.22, TW*0.08],
+               extra_styles=[
+                   ("BACKGROUND", (0,1), (-1,1), _hex(_SEM_BG.get(_c1n, C.GREY_BG))),
+                   ("BACKGROUND", (0,2), (-1,2), _hex(_SEM_BG.get(_c3n, C.GREY_BG))),
+                   ("BACKGROUND", (0,3), (-1,3), _hex(_SEM_BG.get(_c2n, C.GREY_BG))),
+               ])
     story += [c_t, P("Semáforo global C = peor de los tres indicadores.", "small"),
               SP(0.4), HR()]
 
@@ -724,31 +770,39 @@ def _build_pdf(
         dh = [P("Categoría","th"), P("Indicador","th"),
               P("Valor medio","th"), P("Valor adverso","th"), P("Score","th")]
         drows_html = [dh]
-        for cat in df_risk["Categoría_riesgo"].unique():
-            df_cat = df_risk[df_risk["Categoría_riesgo"] == cat]
-            worst  = df_cat.loc[df_cat["score_p80"].idxmax()]
-            score_v = worst.get("score_p80")
-            if score_v is None or score_v < 0.05:
-                continue
-            color = worst.get("riesgo_color", "gris")
-            ps_cat = _sty("dcat", fontSize=8, fontName="Helvetica-Bold",
+        d_extra = []
+        # TODOS los indicadores (ordenados por categoría), incluso score 0 / verde
+        _df_sorted = df_risk.sort_values(["Categoría_riesgo", "score_p80"],
+                                         ascending=[True, False], na_position="last")
+        _ri = 0
+        for _, r in _df_sorted.iterrows():
+            _ri += 1
+            score_v = r.get("score_p80")
+            color   = r.get("riesgo_color", "gris")
+            ps_cat = _sty("dcat", fontSize=7.5, fontName="Helvetica-Bold",
                           textColor=_hex(_SEM_FG.get(
                               "verde" if color in ("verde","amarillo") else
-                              "amarillo" if color == "naranja" else "rojo", C.DARK)))
-            _pct_ref = worst.get("percentil_ref", 80)
-            _pmark   = " (P20)" if int(_pct_ref) == 20 else ""
+                              "amarillo" if color == "naranja" else
+                              "rojo" if color in ("rojo","granate") else "gris", C.DARK)))
+            _pct_ref = r.get("percentil_ref", 80)
+            _pmark   = " (P20)" if int(_pct_ref or 80) == 20 else ""
+            _unidad  = r.get("Unidad", "")
+            _vm = r.get("valor_medio"); _vp = r.get("valor_p80")
             drows_html.append([
-                Paragraph(cat, ps_cat),
-                P(str(worst.get("Nombre_indicador","—")), "td"),
-                P(f"{worst.get('valor_medio',0):.1f} {worst.get('Unidad','')}", "td_c"),
-                P(f"{worst.get('valor_p80',0):.1f} {worst.get('Unidad','')}{_pmark}", "td_c"),
-                P(f"{score_v:.2f}", "td_c"),
+                Paragraph(str(r.get("Categoría_riesgo","—")), ps_cat),
+                P(str(r.get("Nombre_indicador","—")), "td_sm"),
+                P(f"{_vm:.1f} {_unidad}" if _vm is not None else "—", "td_c"),
+                P(f"{_vp:.1f} {_unidad}{_pmark}" if _vp is not None else "—", "td_c"),
+                P(f"{score_v:.2f}" if score_v is not None else "—", "td_c"),
             ])
+            d_extra.append(("BACKGROUND", (0,_ri), (-1,_ri),
+                            _hex(_COLOR_BG_D.get(color, C.GREY_BG))))
         if len(drows_html) > 1:
-            d_t = _tbl(drows_html, cw=[TW*0.22, TW*0.30, TW*0.16, TW*0.16, TW*0.16])
+            d_t = _tbl(drows_html, cw=[TW*0.20, TW*0.34, TW*0.15, TW*0.16, TW*0.15],
+                       extra_styles=d_extra)
             story.append(d_t)
         else:
-            story.append(P("Sin indicadores de riesgo con score > 0.05.", "small"))
+            story.append(P("Sin indicadores de riesgo calculados.", "small"))
     else:
         story.append(P("Riesgo agroclimático no calculado.", "small"))
 
@@ -758,17 +812,22 @@ def _build_pdf(
     tmin    = datos.get("temp_min_mensual", [])
     if precip and tmax and tmin:
         story += [SP(0.3), P("Serie Climática Mensual (promedio histórico)", "h3")]
-        ch = [P(m, "th") for m in ["Mes"] + MESES_ES]
-        pr_row = [P("Precip. (mm)", "td")] + [
-            P(str(precip[i]) if i < len(precip) else "—", "td_c") for i in range(12)]
-        tx_row = [P("T máx (°C)", "td")] + [
-            P(str(tmax[i]) if i < len(tmax) else "—", "td_c") for i in range(12)]
-        tn_row = [P("T mín (°C)", "td")] + [
-            P(str(tmin[i]) if i < len(tmin) else "—", "td_c") for i in range(12)]
-        clim_t = _tbl([ch, pr_row, tx_row, tn_row],
-                      cw=[TW*0.12] + [TW*0.88/12]*12,
-                      row_bgs=[C.LIGHT, C.WHITE])
-        story.append(clim_t)
+        try:
+            _buf = _clima_chart_png(MESES_ES, precip, tmax, tmin)
+            story.append(RLImage(_buf, width=TW,
+                                 height=TW * _CLIMA_FIG_H / _CLIMA_FIG_W))
+        except Exception:
+            # Fallback: tabla numérica si matplotlib no está disponible
+            ch = [P(m, "th") for m in ["Mes"] + MESES_ES]
+            pr_row = [P("Precip. (mm)", "td")] + [
+                P(str(precip[i]) if i < len(precip) else "—", "td_c") for i in range(12)]
+            tx_row = [P("T máx (°C)", "td")] + [
+                P(str(tmax[i]) if i < len(tmax) else "—", "td_c") for i in range(12)]
+            tn_row = [P("T mín (°C)", "td")] + [
+                P(str(tmin[i]) if i < len(tmin) else "—", "td_c") for i in range(12)]
+            story.append(_tbl([ch, pr_row, tx_row, tn_row],
+                              cw=[TW*0.12] + [TW*0.88/12]*12,
+                              row_bgs=[C.LIGHT, C.WHITE]))
 
     story += [SP(0.4), HR()]
 
