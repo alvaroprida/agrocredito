@@ -50,11 +50,11 @@ _SEM_FG  = {"verde": C.GREEN,    "naranja": C.AMBER,    "amarillo": C.AMBER,
              "rojo":  C.RED,      "gris":    C.SUBTEXT}
 _SEM_EMO = {"verde": "🟢", "naranja": "🟡", "amarillo": "🟡", "rojo": "🔴", "gris": "⚪"}
 _SEM_ACT = {
-    "verde":    "Sin restricción adicional.",
-    "naranja":  "Documentación adicional recomendada.",
-    "amarillo": "Documentación adicional recomendada.",
-    "rojo":     "Inspección técnica / verificación presencial requerida.",
-    "gris":     "Indicador no calculado.",
+    "verde":    "Sin restricción.",
+    "naranja":  "Doc. adicional recomendada.",
+    "amarillo": "Doc. adicional recomendada.",
+    "rojo":     "Inspección presencial requerida.",
+    "gris":     "No calculado.",
 }
 _DOC_REQ = {
     "A1_naranja": "Solicitar plan de manejo ambiental o certificación étnico-cultural según condición de frontera.",
@@ -124,7 +124,7 @@ def _build_pdf(
                          textColor=_hex(C.DARK), spaceAfter=2),
         "sub":     _sty("sub",     fontSize=9, textColor=_hex(C.SUBTEXT)),
         "h2":      _sty("h2",      fontName="Helvetica-Bold", fontSize=11,
-                         textColor=_hex(C.DARK), spaceBefore=10, spaceAfter=4),
+                         textColor=_hex(C.DARK), spaceBefore=5, spaceAfter=3),
         "h3":      _sty("h3",      fontName="Helvetica-Bold", fontSize=9.5,
                          textColor=_hex(C.MID), spaceBefore=5, spaceAfter=2),
         "body":    _sty("body"),
@@ -184,8 +184,8 @@ def _build_pdf(
     def _tbl(data, cw, header_row=True, row_bgs=None, extra_styles=None):
         t = Table(data, colWidths=cw, repeatRows=1 if header_row else 0)
         base = [
-            ("TOPPADDING",    (0,0), (-1,-1), 5),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING",    (0,0), (-1,-1), 3.5),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3.5),
             ("LEFTPADDING",   (0,0), (-1,-1), 6),
             ("RIGHTPADDING",  (0,0), (-1,-1), 6),
             ("GRID",          (0,0), (-1,-1), 0.4, _hex(C.BORDER)),
@@ -208,7 +208,8 @@ def _build_pdf(
     # Predio metadata
     cod       = predio.get("codigo","—")       if predio else "—"
     dep       = predio.get("departamento","—") if predio else "—"
-    mun       = an.get("municipio") or datos.get("municipio","—")
+    mun       = ((predio.get("municipio") if predio else None)
+                 or an.get("municipio") or datos.get("municipio","—"))
     area_tot  = float((predio.get("area_ha") if predio else None) or datos.get("area_total_ha", 0) or 0)
     cultivo   = an.get("cultivo") or datos.get("cultivo","—")
     c_lat     = an.get("c_lat",  datos.get("lat",  0.0))
@@ -288,11 +289,11 @@ def _build_pdf(
 
     # ── PORTADA / FICHA ───────────────────────────────────────────────────────
     story += [
-        SP(0.4),
+        SP(0.25),
         P("Reporte de Evaluación Ex-Ante", "title"),
-        SP(0.22),
+        SP(0.2),
         P("Evaluación agroclimática y productiva para decisiones de crédito agrícola · Colombia", "sub"),
-        SP(0.35), HR(), SP(0.15),
+        SP(0.22), HR(), SP(0.1),
     ]
 
     ficha = _tbl(
@@ -315,7 +316,7 @@ def _build_pdf(
             ("FONTNAME",   (2,0), (2,-1), "Helvetica-Bold"),
         ],
     )
-    story += [ficha, SP(0.35)]
+    story += [ficha, SP(0.22)]
 
     # ── SCORE FINAL CONSOLIDADO + RESOLUCIÓN ──────────────────────────────────
     if score_final is not None:
@@ -327,28 +328,25 @@ def _build_pdf(
         }
         _sf_bg, _sf_fg = _sf_colors.get(score_final, (C.GREY_BG, C.SUBTEXT))
         _res_lbl, _res_desc = _RESOLUCION.get(score_final, (decision_final, ""))
-        sf_lbl = _sty("sfl", fontName="Helvetica-Bold", fontSize=15,
+        sf_lbl = _sty("sfl", fontName="Helvetica-Bold", fontSize=14, leading=17,
                       alignment=TA_CENTER, textColor=_hex(_sf_fg))
-        sf_sub = _sty("sfs", fontName="Helvetica-Bold", fontSize=10.5,
-                      alignment=TA_CENTER, textColor=_hex(_sf_fg))
-        sf_dsc = _sty("sfd", fontSize=9, alignment=TA_CENTER, textColor=_hex(_sf_fg))
+        sf_dsc = _sty("sfd", fontSize=8.5, leading=11, alignment=TA_CENTER,
+                      textColor=_hex(_sf_fg))
         sf_box = Table(
-            [[Paragraph(f"SCORE FINAL: {score_final} / 4", sf_lbl)],
-             [Paragraph(_res_lbl, sf_sub)],
+            [[Paragraph(f"SCORE FINAL: {score_final} / 4 · {_res_lbl}", sf_lbl)],
              [Paragraph(_res_desc, sf_dsc)]],
             colWidths=[TW],
         )
         sf_box.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,-1), _hex(_sf_bg)),
-            ("TOPPADDING",    (0,0), (-1,0),  10),
-            ("BOTTOMPADDING", (0,-1),(-1,-1), 10),
-            ("TOPPADDING",    (0,1), (-1,-1), 2),
-            ("BOTTOMPADDING", (0,0), (-1,0),  2),
+            ("TOPPADDING",    (0,0), (-1,0),  7),
+            ("BOTTOMPADDING", (0,-1),(-1,-1), 7),
+            ("TOPPADDING",    (0,1), (-1,-1), 1),
+            ("BOTTOMPADDING", (0,0), (-1,0),  1),
             ("LEFTPADDING",   (0,0), (-1,-1), 14),
             ("RIGHTPADDING",  (0,0), (-1,-1), 14),
-            ("LINEBELOW",     (0,0), (-1,0),  1, _hex(_sf_fg)),
         ]))
-        story += [sf_box, SP(0.2)]
+        story += [sf_box, SP(0.12)]
     else:
         story += [P("Score final no disponible — ejecuta los indicadores en la app "
                     "para obtener la resolución consolidada.", "small"), SP(0.2)]
@@ -356,8 +354,7 @@ def _build_pdf(
     # Obs. unidad productiva
     if obs_unidad and obs_unidad != "—":
         story.append(P(f"<b>Observación inicial asesor:</b> {obs_unidad}", "body"))
-        story.append(SP(0.15))
-    story.append(SP(0.1))
+    story.append(SP(0.08))
 
     # ── RESUMEN DE VALIDACIÓN PRE-CRÉDITO ─────────────────────────────────────
     story.append(P("Resumen de Validación Pre-Crédito", "h2"))
@@ -421,9 +418,7 @@ def _build_pdf(
         cw=[TW*0.07, TW*0.22, TW*0.15, TW*0.07, TW*0.28, TW*0.21],
         extra_styles=extra_resumen,
     )
-    story += [resumen_t, SP(0.1)]
-    story.append(P("B3 (altitud) es informativo y no pondera en el score final.", "small"))
-    story += [SP(0.35), HR()]
+    story += [resumen_t, SP(0.12), HR()]
 
     # ── DOCUMENTACIÓN ADICIONAL REQUERIDA ─────────────────────────────────────
     doc_items = []
@@ -451,10 +446,9 @@ def _build_pdf(
         story.append(doc_t)
     else:
         story.append(P("✅ Ninguna documentación adicional requerida — todos los indicadores en verde.", "body"))
-    story += [SP(0.4)]
+    story += [SP(0.22)]
 
     # ── APROBACIÓN Y FIRMAS ───────────────────────────────────────────────────
-    story.append(P("Aprobación y Firmas", "h2"))
     firma_t = Table(
         [
             [P("<b>Analista de Crédito</b>","td_c"),
@@ -470,17 +464,18 @@ def _build_pdf(
              P("Fecha:  ___________________","small")],
         ],
         colWidths=[TW/3]*3,
-        rowHeights=[0.5*cm, 0.4*cm, 1.4*cm, 0.45*cm, 0.45*cm],
+        rowHeights=[0.42*cm, 0.28*cm, 0.85*cm, 0.38*cm, 0.38*cm],
     )
     firma_t.setStyle(TableStyle([
         ("GRID",          (0,0), (-1,-1), 0.4, _hex(C.BORDER)),
         ("BACKGROUND",    (0,0), (-1,0),  _hex(C.LIGHT)),
-        ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING",    (0,0), (-1,-1), 3),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
         ("VALIGN",        (0,0), (-1,-1), "BOTTOM"),
         ("LINEABOVE",     (0,2), (-1,2),  1.2, _hex(C.DARK)),
     ]))
-    story += [firma_t]
+    # KeepTogether evita que el título y la tabla de firmas se partan entre páginas
+    story += [KeepTogether([P("Aprobación y Firmas", "h2"), firma_t])]
 
     # ════════════════════════════════════════════════════════════════════════
     #  PÁGINA 2+ · ANÁLISIS DETALLADO DE LOS INDICADORES

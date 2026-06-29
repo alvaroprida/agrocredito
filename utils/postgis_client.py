@@ -45,6 +45,7 @@ _MOCK_PREDIOS = {
     (4.8087, -75.6906): {
         "codigo": "63001000100010001000",
         "departamento": "Quindío",
+        "municipio": "Salento",
         "area_ha": 12.4,
         "geojson": {"type": "Polygon", "coordinates": [[
             [-75.6930, 4.8065], [-75.6880, 4.8065],
@@ -55,6 +56,7 @@ _MOCK_PREDIOS = {
     (7.8833, -76.6500): {
         "codigo": "05837000100020002000",
         "departamento": "Antioquia",
+        "municipio": "Turbo",
         "area_ha": 28.0,
         "geojson": {"type": "Polygon", "coordinates": [[
             [-76.6540, 7.8800], [-76.6460, 7.8800],
@@ -134,36 +136,51 @@ def _query_predio_mock(lat, lon):
     if data is None:
         return None
     geom = shape(data["geojson"])
+    mun  = data.get("municipio", "—")
     gdf = gpd.GeoDataFrame(
-        [{"codigo": data["codigo"], "departamento": data["departamento"], "area_ha": data["area_ha"]}],
+        [{"codigo": data["codigo"], "departamento": data["departamento"],
+          "municipio": mun, "area_ha": data["area_ha"]}],
         geometry=[geom], crs="EPSG:4326",
     )
     return {"codigo": data["codigo"], "departamento": data["departamento"],
-            "area_ha": data["area_ha"], "geojson": data["geojson"], "gdf": gdf}
+            "municipio": mun, "area_ha": data["area_ha"],
+            "geojson": data["geojson"], "gdf": gdf}
 
 
 def _query_predio_real(lat, lon):
-    sql = text("""
-        SELECT
-            codigo,
-            COALESCE(departamento, '—')                      AS departamento,
-            COALESCE(ROUND(area_ha::numeric, 2), 0)          AS area_ha,
-            ST_AsGeoJSON(wkb_geometry)::json                 AS geojson
-        FROM predios
-        WHERE ST_Contains(wkb_geometry, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326))
-        LIMIT 1
-    """)
-    with _get_engine().connect() as conn:
-        row = conn.execute(sql, {"lat": lat, "lon": lon}).fetchone()
+    def _run(include_mun: bool):
+        mun_sel = ("COALESCE(municipio, '—') AS municipio,"
+                   if include_mun else "'—' AS municipio,")
+        sql = text(f"""
+            SELECT
+                codigo,
+                COALESCE(departamento, '—')                      AS departamento,
+                {mun_sel}
+                COALESCE(ROUND(area_ha::numeric, 2), 0)          AS area_ha,
+                ST_AsGeoJSON(wkb_geometry)::json                 AS geojson
+            FROM predios
+            WHERE ST_Contains(wkb_geometry, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326))
+            LIMIT 1
+        """)
+        with _get_engine().connect() as conn:
+            return conn.execute(sql, {"lat": lat, "lon": lon}).fetchone()
+
+    # Intento con la columna 'municipio'; si no existe en la tabla, reintenta sin ella
+    try:
+        row = _run(include_mun=True)
+    except Exception:
+        row = _run(include_mun=False)
     if row is None:
         return None
     geojson = row.geojson if isinstance(row.geojson, dict) else json.loads(row.geojson)
     gdf = gpd.GeoDataFrame(
-        [{"codigo": row.codigo, "departamento": row.departamento, "area_ha": float(row.area_ha)}],
+        [{"codigo": row.codigo, "departamento": row.departamento,
+          "municipio": row.municipio, "area_ha": float(row.area_ha)}],
         geometry=[shape(geojson)], crs="EPSG:4326",
     )
     return {"codigo": row.codigo, "departamento": row.departamento,
-            "area_ha": float(row.area_ha), "geojson": geojson, "gdf": gdf}
+            "municipio": row.municipio, "area_ha": float(row.area_ha),
+            "geojson": geojson, "gdf": gdf}
 
 
 # ════════════════════════════════════════════════════════════════════════════
