@@ -977,37 +977,79 @@ with tab_monitoreo:
             ]
             return f"{_ico} {', '.join(_alerts)}" if _alerts else _ico
 
-        def _global_cell(clim: dict, ndv: dict) -> str:
+        def _global_level(clim: dict, ndv: dict) -> str:
+            """Peor estado ACTUAL entre Vegetación (Hoy) y Clima (Hoy)."""
             _ns = (max([ndv.get("a1_sem","verde"), ndv.get("a2_sem","verde")],
                        key=lambda s: SEM_ORDER.get(s, 0))
                    if not ndv.get("error") and ndv.get("last_date") else "verde")
             _cs = clim.get("Hoy", {}).get("global", "verde") if not clim.get("error") else "verde"
-            _g  = max([_ns, _cs], key=lambda s: SEM_ORDER.get(s, 0))
-            return f'{SEM_ICON[_g]} {"Normal" if _g=="verde" else "Precaución" if _g=="amarillo" else "Alerta"}'
+            return max([_ns, _cs], key=lambda s: SEM_ORDER.get(s, 0))
 
         st.caption(
             "🟢 Sin alerta  ·  🟡 Precaución — contacto proactivo  ·  "
-            "🔴 Alerta — intervención recomendada  ·  "
-            "Cuando hay alerta, se indica la causa al lado del semáforo."
+            "🔴 Alerta — intervención recomendada"
+        )
+        st.markdown(
+            "<div style='font-size:0.82rem;color:#475569;margin:-4px 0 10px 0;line-height:1.4'>"
+            "La <b>🎯 Alerta Global</b> es el <b>peor estado actual</b> entre "
+            "<b>🌱 Vegetación (Hoy)</b> y <b>🌡️ Clima (Hoy)</b>. "
+            "El <b>forecast</b> (+7 / +14 días) es anticipación temprana y "
+            "<u>no altera</u> la alerta de hoy.</div>",
+            unsafe_allow_html=True,
         )
 
-        _rows = []
+        _GL_BG  = {"verde":"#dcfce7","amarillo":"#fef9c3","rojo":"#fee2e2","gris":"#f1f5f9"}
+        _GL_TX  = {"verde":"#166534","amarillo":"#713f12","rojo":"#7f1d1d","gris":"#475569"}
+        _GL_TXT = {"verde":"Normal","amarillo":"Precaución","rojo":"Alerta","gris":"—"}
+        _ACT_BG = "#f8fafc"   # estado actual (importante)
+        _FC_BG  = "#fbfbfd"   # forecast (atenuado)
+        _BB     = "border-bottom:1px solid #e2e8f0"
+
+        _body = ""
         for _p in _portfolio:
             _nm   = _p["nombre_predio"]
             _rec  = _results_map.get(_nm, {})
             _clim = _rec.get("clima", {})
             _ndv  = _rec.get("ndvi",  {})
-            _rows.append({
-                "Predio":                 _nm,
-                "Cultivo":                _p["cultivo"],
-                "Alerta Global":          _global_cell(_clim, _ndv),
-                "Vegetación NDVI (Hoy)":  _veg_cell(_ndv),
-                "Clima (Hoy)":            _clima_cell(_clim, "Hoy"),
-                "Clima (+7d)":            _clima_cell(_clim, "+7 días"),
-                "Clima (+14d)":           _clima_cell(_clim, "+14 días"),
-            })
+            _gl   = _global_level(_clim, _ndv)
+            _body += (
+                "<tr>"
+                f"<td style='padding:7px 10px;font-weight:600;{_BB}'>{_nm}</td>"
+                f"<td style='padding:7px 10px;color:#475569;{_BB}'>{_p['cultivo']}</td>"
+                f"<td style='padding:7px 10px;text-align:center;font-weight:700;{_BB};"
+                f"background:{_GL_BG[_gl]};color:{_GL_TX[_gl]};"
+                f"border-left:3px solid {_GL_TX[_gl]};border-right:3px solid {_GL_TX[_gl]}'>"
+                f"{SEM_ICON.get(_gl,'⚪')} {_GL_TXT[_gl]}</td>"
+                f"<td style='padding:7px 10px;background:{_ACT_BG};{_BB}'>{_veg_cell(_ndv)}</td>"
+                f"<td style='padding:7px 10px;background:{_ACT_BG};{_BB}'>{_clima_cell(_clim,'Hoy')}</td>"
+                f"<td style='padding:7px 10px;background:{_FC_BG};color:#64748b;font-size:0.82rem;{_BB}'>{_clima_cell(_clim,'+7 días')}</td>"
+                f"<td style='padding:7px 10px;background:{_FC_BG};color:#64748b;font-size:0.82rem;{_BB}'>{_clima_cell(_clim,'+14 días')}</td>"
+                "</tr>"
+            )
 
-        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;font-size:0.86rem'>"
+            "<thead>"
+            "<tr style='background:#1e293b;color:#fff'>"
+            "<th rowspan='2' style='padding:6px 10px;text-align:left'>Predio</th>"
+            "<th rowspan='2' style='padding:6px 10px;text-align:left'>Cultivo</th>"
+            "<th rowspan='2' style='padding:6px 10px;text-align:center;"
+            "border-left:3px solid #fff;border-right:3px solid #fff'>🎯 Alerta<br>Global</th>"
+            "<th colspan='2' style='padding:5px 10px;text-align:center;background:#334155'>"
+            "Estado actual · <span style='font-weight:400;font-size:0.8rem'>determina la alerta</span></th>"
+            "<th colspan='2' style='padding:5px 10px;text-align:center;background:#64748b;color:#e2e8f0'>"
+            "Forecast climático · <span style='font-weight:400;font-size:0.8rem'>anticipación</span></th>"
+            "</tr>"
+            "<tr style='background:#334155;color:#fff'>"
+            "<th style='padding:5px 10px'>🌱 Vegetación (Hoy)</th>"
+            "<th style='padding:5px 10px'>🌡️ Clima (Hoy)</th>"
+            "<th style='padding:5px 10px;background:#64748b;color:#e2e8f0;font-weight:500'>Clima +7d</th>"
+            "<th style='padding:5px 10px;background:#64748b;color:#e2e8f0;font-weight:500'>Clima +14d</th>"
+            "</tr>"
+            "</thead>"
+            f"<tbody>{_body}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
         # ── Panel de detalle ──────────────────────────────────────────────────
         st.markdown("---")
