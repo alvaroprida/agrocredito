@@ -832,13 +832,12 @@ with tab_monitoreo:
         with col_dl:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             _tmpl_buf = io.BytesIO()
-            pd.DataFrame([{
-                "nombre_predio":    "Finca Ejemplo",
-                "latitud":          4.5000,
-                "longitud":        -74.3000,
-                "cultivo":          "Café",
-                "fecha_desembolso": "2025-01-15",
-            }]).to_excel(_tmpl_buf, index=False)
+            _tmpl_df = (
+                pd.DataFrame(PORTFOLIO_DEFAULT)
+                .rename(columns={"lat": "latitud", "lon": "longitud"})
+                [["nombre_predio", "latitud", "longitud", "cultivo", "fecha_desembolso"]]
+            )
+            _tmpl_df.to_excel(_tmpl_buf, index=False)
             st.download_button(
                 "📥 Descargar Template",
                 data=_tmpl_buf.getvalue(),
@@ -865,10 +864,6 @@ with tab_monitoreo:
             _portfolio = PORTFOLIO_DEFAULT
     else:
         _portfolio = PORTFOLIO_DEFAULT
-        st.info(
-            "Usando portafolio de demostración · 5 predios agrícolas en Cundinamarca",
-            icon="ℹ️",
-        )
 
     # ── Botón de cálculo ──────────────────────────────────────────────────────
     _col_btn, _ = st.columns([1, 3])
