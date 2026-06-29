@@ -490,23 +490,25 @@ def _build_pdf(
     story += [SP(0.22)]
 
     # ── APROBACIÓN Y FIRMAS ───────────────────────────────────────────────────
-    # Bloque de firma limpio: sin rejilla; solo la línea base de firma bajo el
-    # espacio en blanco de cada columna.
+    # Bloque de firma sin ninguna línea de tabla: la línea para firmar es el
+    # subrayado de cada columna (separados por el padding, sin línea continua).
+    _und = "____________________"
     firma_t = Table(
         [
             [P("<b>Analista de Crédito</b>","td_c"),
              P("<b>Responsable de Riesgo</b>","td_c"),
              P("<b>Gerente de Área</b>","td_c")],
             [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],          # espacio para firmar
-            [P("Nombre: ___________________","small"),
-             P("Nombre: ___________________","small"),
-             P("Nombre: ___________________","small")],
-            [P("Fecha:  ___________________","small"),
-             P("Fecha:  ___________________","small"),
-             P("Fecha:  ___________________","small")],
+            [P(_und,"td_c"), P(_und,"td_c"), P(_und,"td_c")],       # línea de firma
+            [P(f"Nombre: {_und}","small"),
+             P(f"Nombre: {_und}","small"),
+             P(f"Nombre: {_und}","small")],
+            [P(f"Fecha:  {_und}","small"),
+             P(f"Fecha:  {_und}","small"),
+             P(f"Fecha:  {_und}","small")],
         ],
         colWidths=[TW/3]*3,
-        rowHeights=[0.5*cm, 1.0*cm, 0.4*cm, 0.4*cm],
+        rowHeights=[0.5*cm, 0.7*cm, 0.28*cm, 0.4*cm, 0.4*cm],
     )
     firma_t.setStyle(TableStyle([
         ("BACKGROUND",    (0,0), (-1,0),  _hex(C.LIGHT)),
@@ -517,10 +519,6 @@ def _build_pdf(
         ("VALIGN",        (0,0), (-1,0),  "MIDDLE"),
         ("VALIGN",        (0,1), (-1,-1), "BOTTOM"),
         ("ALIGN",         (0,0), (-1,0),  "CENTER"),
-        # Línea base de firma bajo el espacio en blanco (una por columna)
-        ("LINEBELOW",     (0,1), (0,1),   0.8, _hex(C.DARK)),
-        ("LINEBELOW",     (1,1), (1,1),   0.8, _hex(C.DARK)),
-        ("LINEBELOW",     (2,1), (2,1),   0.8, _hex(C.DARK)),
     ]))
     # KeepTogether evita que el título y la tabla de firmas se partan entre páginas
     story += [KeepTogether([P("Aprobación y Firmas", "h2"), firma_t])]

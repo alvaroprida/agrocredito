@@ -736,7 +736,8 @@ with tab_inicio:
                        "gdf_frontera","gdf_aptitud","gdf_construcciones",
                        "a1_nivel","a2_nivel","area_pendiente_excluida_ha",
                        "area_ndvi_bajo_ha","area_construcciones_ha",
-                       "poly_pendiente","poly_ndvi","poly_const","ndvi_low_mask"]:
+                       "poly_pendiente","poly_ndvi","poly_const","ndvi_low_mask",
+                       "auto_analysis_for"]:
                 st.session_state.pop(_k, None)
             st.rerun()
 
@@ -1953,6 +1954,51 @@ with tab_validacion:
     st.subheader(f"Validación Pre-Crédito · {cultivo.capitalize()} · {ubicacion_label}")
 
     MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+
+    # ════════════════════════════════════════════════════════════════════
+    #  AUTO-ANÁLISIS CON VALORES POR DEFECTO (una vez por predio)
+    #  Al identificar un predio en Inicio y entrar aquí, se lanza el cálculo
+    #  completo con los umbrales por defecto (A2-A pendiente 25%, A2-C NDVI
+    #  0.25, A2 área efectiva, B2 actividad). El usuario puede luego ajustar
+    #  los sliders y re-lanzar cada bloque con su botón para actualizar.
+    # ════════════════════════════════════════════════════════════════════
+    _pcode = predio.get("codigo", "")
+    if st.session_state.get("auto_analysis_for") != _pcode:
+        _gdf_auto = predio["gdf"]
+        with st.spinner("Ejecutando análisis con valores por defecto "
+                        "(terreno · NDVI · actividad productiva)…"):
+            # A2-A · Terreno (umbral de pendiente 25 %)
+            if not st.session_state.get("terrain"):
+                try:
+                    _t_auto = get_terrain_analysis(_gdf_auto, 25.0)
+                    st.session_state["terrain"] = _t_auto
+                    st.session_state["area_pendiente_excluida_ha"] = \
+                        _t_auto["stats"]["area_no_cultivable_ha"]
+                except Exception as _e_auto:
+                    st.warning(f"⚠️ Terreno (A2-A) no se calculó automáticamente: {_e_auto}")
+            # A2-C · NDVI histórico (umbral 0.25)
+            if not st.session_state.get("ndvi_result"):
+                try:
+                    _r_auto = get_ndvi_gee(_gdf_auto, ndvi_threshold=0.25,
+                                           n_years=3, max_cloud_pct=20.0)
+                    st.session_state["ndvi_result"]   = _r_auto
+                    st.session_state["ndvi_low_mask"] = _r_auto["low_ndvi_mask"]
+                except Exception as _e_auto:
+                    st.warning(f"⚠️ NDVI (A2-C) no se calculó automáticamente: {_e_auto}")
+            # B2 · Actividad productiva (NDVI histórico)
+            if not st.session_state.get("b2_result"):
+                try:
+                    import json as _json_auto
+                    _geo_auto = _json_auto.dumps(
+                        _gdf_auto.to_crs("EPSG:4326").geometry.iloc[0].__geo_interface__)
+                    st.session_state["b2_result"] = _get_b2_cached(_geo_auto, cultivo)
+                except Exception as _e_auto:
+                    st.warning(f"⚠️ Actividad productiva (B2) no se calculó automáticamente: {_e_auto}")
+            # A2 · Área efectiva → marcar calculada; los polígonos y el área se
+            # computan al renderizarse los fragments con los resultados anteriores.
+            st.session_state["area_ef_computed"] = True
+        st.session_state["auto_analysis_for"] = _pcode
+        st.rerun()
 
     # ════════════════════════════════════════════════════════════════════
     #  A · VALIDACIÓN GEOMÉTRICA Y LEGAL
