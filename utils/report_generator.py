@@ -257,6 +257,7 @@ def _build_pdf(
 
     # Existencia del predio
     exist_nivel = an.get("existencia_nivel", "verde" if predio else "rojo")
+    exist_texto = an.get("existencia_texto")
 
     # A1 · Frontera agrícola
     a1_nivel   = an.get("a1_nivel", "gris")
@@ -409,7 +410,8 @@ def _build_pdf(
     _blq_rows = [
         ("",   "Existencia del Predio",       "PostGIS / IGAC",
          exist_nivel,
-         "Polígono catastral identificado" if exist_nivel != "rojo" else "Predio no encontrado"),
+         exist_texto or ("Polígono catastral identificado" if exist_nivel != "rojo"
+                         else "Predio no encontrado")),
         ("A1", "Zona Agrícola · Frontera",    "PostGIS / IGAC",
          a1_nivel, _front_res),
         ("A2", "Área Efectiva Cultivable",    "DEM · NDVI · Catastro",

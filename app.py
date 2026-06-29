@@ -35,7 +35,7 @@ CULTIVOS_DISPONIBLES = [
 ]
 import numpy as np
 import folium
-from folium.plugins import Fullscreen
+from folium.plugins import Fullscreen, Draw
 from streamlit_folium import st_folium
 from datetime import date, timedelta
 import plotly.graph_objects as go
@@ -675,6 +675,61 @@ def _area_efectiva_from_polys(predio_gdf, area_total, polys):
         "pct_ef":             pct_ef,
     }
 
+def _geojson_to_geom(gj):
+    """Extrae una geometría (Polygon/MultiPolygon) de un GeoJSON que puede ser
+    FeatureCollection, Feature o geometría. Devuelve shapely geom (EPSG:4326) o None."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    if not isinstance(gj, dict):
+        return None
+    try:
+        t = gj.get("type")
+        if t == "FeatureCollection":
+            geoms = [shape(f["geometry"]) for f in gj.get("features", [])
+                     if f.get("geometry")]
+            return unary_union(geoms) if geoms else None
+        if t == "Feature":
+            return shape(gj["geometry"]) if gj.get("geometry") else None
+        return shape(gj)   # objeto geometría directo
+    except Exception:
+        return None
+
+
+def _build_predio_from_geom(geom):
+    """Construye el dict de predio (mismo formato que get_predio_por_punto) a
+    partir de una geometría arbitraria (dibujada o subida). Calcula el área e
+    identifica si el CENTROIDE cae dentro de un predio catastral (existencia)."""
+    from shapely.geometry import mapping
+    if geom is None or geom.is_empty:
+        return None
+    gdf4 = gpd.GeoDataFrame(geometry=[geom], crs="EPSG:4326")
+    try:
+        area_ha = float(gdf4.to_crs(_metric_crs(gdf4)).geometry.iloc[0].area / 10_000)
+    except Exception:
+        area_ha = 0.0
+    cen = geom.centroid
+    cad = None
+    try:
+        cad = get_predio_por_punto(cen.y, cen.x)
+    except Exception:
+        cad = None
+    en_cat = cad is not None
+    codigo = cad["codigo"]               if en_cat else "Definido manualmente"
+    dep    = cad.get("departamento","—") if en_cat else "—"
+    mun    = cad.get("municipio","—")    if en_cat else "—"
+    gdf = gpd.GeoDataFrame(
+        [{"codigo": codigo, "departamento": dep, "municipio": mun,
+          "area_ha": round(area_ha, 2)}],
+        geometry=[geom], crs="EPSG:4326",
+    )
+    return {
+        "codigo": codigo, "departamento": dep, "municipio": mun,
+        "area_ha": round(area_ha, 2), "geojson": mapping(geom),
+        "gdf": gdf, "en_catastro": en_cat,
+        "centroide": (cen.y, cen.x),
+    }
+
+
 def mapa_predio_simple(lat, lon, predio):
     m = _base_map(predio["gdf"])
     _add_predio(m, predio["gdf"])
@@ -737,57 +792,155 @@ with tab_inicio:
                        "a1_nivel","a2_nivel","area_pendiente_excluida_ha",
                        "area_ndvi_bajo_ha","area_construcciones_ha",
                        "poly_pendiente","poly_ndvi","poly_const","ndvi_low_mask",
-                       "auto_analysis_for"]:
+                       "auto_analysis_for","_drawn_geojson","_uploaded_geojson",
+                       "existencia_texto"]:
                 st.session_state.pop(_k, None)
             st.rerun()
 
-    c1, c2, c3 = st.columns(3)
-    with c1: lat_input  = st.number_input("Latitud",  value=5.07013,  format="%.6f")
-    with c2: lon_input  = st.number_input("Longitud", value=-73.55157, format="%.6f")
-    with c3: cultivo_in = st.selectbox("Tipo de cultivo", CULTIVOS_DISPONIBLES,
-                                         index=CULTIVOS_DISPONIBLES.index("Café"))
+    cultivo_in = st.selectbox("Tipo de cultivo", CULTIVOS_DISPONIBLES,
+                              index=CULTIVOS_DISPONIBLES.index("Café"))
 
-    if st.button("🔍 Analizar predio", type="primary", use_container_width=True):
-        _cultivo_lower = cultivo_in.lower()
-        caso_m = ("Plátano · Urabá" if _cultivo_lower == "plátano"
+    _M_PUNTO = "📍 Cruce con catastro (punto)"
+    _M_DRAW  = "✏️ Dibujar polígono en el mapa"
+    _M_GEOJ  = "📤 Subir GeoJSON"
+    _metodo = st.radio(
+        "Método de definición del polígono del predio",
+        [_M_PUNTO, _M_DRAW, _M_GEOJ],
+        horizontal=True, key="predio_metodo",
+    )
+
+    _lat_in = _lon_in = None
+    _puede_analizar = False
+
+    if _metodo == _M_PUNTO:
+        c1, c2 = st.columns(2)
+        with c1: _lat_in = st.number_input("Latitud",  value=5.07013,  format="%.6f", key="in_lat_pt")
+        with c2: _lon_in = st.number_input("Longitud", value=-73.55157, format="%.6f", key="in_lon_pt")
+        st.caption("Se usará el polígono catastral que contiene el punto.")
+        _puede_analizar = True
+
+    elif _metodo == _M_DRAW:
+        c1, c2 = st.columns(2)
+        with c1: _lat_in = st.number_input("Latitud (centro del mapa)",  value=5.07013,  format="%.6f", key="in_lat_dr")
+        with c2: _lon_in = st.number_input("Longitud (centro del mapa)", value=-73.55157, format="%.6f", key="in_lon_dr")
+        st.caption("Centra el mapa con las coordenadas, dibuja el polígono (herramienta ▭ / ⬠) y pulsa Analizar.")
+        _md = folium.Map(location=[_lat_in, _lon_in], zoom_start=16, tiles="Esri.WorldImagery")
+        Fullscreen().add_to(_md)
+        folium.Marker([_lat_in, _lon_in], tooltip="Centro",
+                      icon=folium.Icon(color="red", icon="map-marker", prefix="fa")).add_to(_md)
+        Draw(export=False,
+             draw_options={"polyline": False, "circle": False, "circlemarker": False,
+                           "marker": False, "polygon": True, "rectangle": True},
+             edit_options={"edit": True, "remove": True}).add_to(_md)
+        _out = st_folium(_md, width=750, height=480, key="draw_map",
+                         returned_objects=["last_active_drawing"])
+        if _out and _out.get("last_active_drawing"):
+            st.session_state["_drawn_geojson"] = _out["last_active_drawing"].get("geometry")
+        if st.session_state.get("_drawn_geojson"):
+            st.success("✅ Polígono dibujado capturado.")
+            _puede_analizar = True
+        else:
+            st.info("Dibuja un polígono en el mapa para habilitar el análisis.")
+
+    else:  # Subir GeoJSON
+        _up = st.file_uploader("Archivo GeoJSON del predio", type=["geojson", "json"],
+                               key="geojson_upload")
+        if _up is not None:
+            try:
+                import json as _j
+                st.session_state["_uploaded_geojson"] = _j.load(_up)
+            except Exception as _e:
+                st.error(f"No se pudo leer el GeoJSON: {_e}")
+                st.session_state.pop("_uploaded_geojson", None)
+        _gj_up = st.session_state.get("_uploaded_geojson")
+        if _gj_up is not None and _geojson_to_geom(_gj_up) is not None:
+            st.success("✅ GeoJSON cargado.")
+            _puede_analizar = True
+        elif _gj_up is not None:
+            st.error("El GeoJSON no contiene una geometría poligonal válida.")
+        else:
+            st.info("Sube un GeoJSON para habilitar el análisis.")
+
+    if st.button("🔍 Analizar predio", type="primary", use_container_width=True,
+                 disabled=not _puede_analizar):
+        caso_m = ("Plátano · Urabá" if cultivo_in.lower() == "plátano"
                   else "Café · Eje Cafetero")
-        st.session_state.update({
-            "lat": lat_input, "lon": lon_input, "cultivo": cultivo_in,
-            "analizado": True,
-            "datos": {**CASOS_ESTUDIO[caso_m], "lat": lat_input, "lon": lon_input},
-        })
-        # La consulta del polígono catastral se hace SOLO al pulsar el botón.
-        with st.spinner("Consultando base catastral..."):
-            st.session_state["predio"] = get_predio_por_punto(lat_input, lon_input)
+        _predio = None
+        if _metodo == _M_PUNTO:
+            with st.spinner("Consultando base catastral…"):
+                _predio = get_predio_por_punto(_lat_in, _lon_in)
+            if _predio is not None:
+                _predio["en_catastro"] = True
+            _cen_lat, _cen_lon = _lat_in, _lon_in
+        elif _metodo == _M_DRAW:
+            with st.spinner("Procesando polígono dibujado…"):
+                _predio = _build_predio_from_geom(_geojson_to_geom(
+                    st.session_state.get("_drawn_geojson")))
+            _cen_lat, _cen_lon = (_predio["centroide"] if _predio else (_lat_in, _lon_in))
+        else:
+            with st.spinner("Procesando GeoJSON…"):
+                _predio = _build_predio_from_geom(_geojson_to_geom(
+                    st.session_state.get("_uploaded_geojson")))
+            _cen_lat, _cen_lon = (_predio["centroide"] if _predio else (_lat_in, _lon_in))
+
+        st.session_state["analizado"] = True
+        st.session_state["predio"]    = _predio
+        if _predio is not None:
+            _en_cat = _predio.get("en_catastro", False)
+            _ex_txt = (("Polígono catastral identificado" if _metodo == _M_PUNTO
+                        else "Centroide dentro de predio catastral") if _en_cat
+                       else "Polígono definido manualmente · centroide fuera del catastro")
+            st.session_state.update({
+                "lat": _cen_lat, "lon": _cen_lon, "cultivo": cultivo_in,
+                "datos": {**CASOS_ESTUDIO[caso_m], "lat": _cen_lat, "lon": _cen_lon},
+                "a1_nivel": "verde" if _en_cat else "naranja",
+                "existencia_texto": _ex_txt,
+            })
 
     st.markdown("---")
     if not st.session_state.get("analizado"):
-        st.info("Introduce las coordenadas del predio y pulsa **Analizar predio**.")
+        st.info("Define el polígono del predio (punto · dibujo · GeoJSON) y pulsa **Analizar predio**.")
     else:
-        lat     = st.session_state["lat"]
-        lon     = st.session_state["lon"]
+        lat     = st.session_state.get("lat")
+        lon     = st.session_state.get("lon")
         cultivo = st.session_state.get("cultivo","café")
-        predio  = st.session_state.get("predio")   # ya consultado al pulsar el botón
+        predio  = st.session_state.get("predio")
 
         if predio is None:
-            st.warning("No se encontró ningún predio en las coordenadas indicadas.")
+            st.warning(
+                "No se encontró ningún predio catastral que contenga el punto. "
+                "Prueba a **dibujar el polígono** o **subir un GeoJSON**."
+            )
         else:
-            st.markdown("#### 🗺️ Identificación del predio catastral")
+            _en_cat = predio.get("en_catastro", True)
+            st.markdown("#### 🗺️ Identificación del predio")
             c1,c2,c3,c4 = st.columns(4)
-            with c1: st.metric("Código catastral", predio["codigo"])
-            with c2: st.metric("Departamento",     predio.get("departamento","—"))
-            with c3: st.metric("Área catastral",   f"{predio.get('area_ha','—')} ha")
+            with c1: st.metric("Código catastral", str(predio.get("codigo","—")))
+            with c2: st.metric("Municipio",        predio.get("municipio","—"))
+            with c3: st.metric("Área",             f"{predio.get('area_ha','—')} ha")
             with c4: st.metric("Cultivo",          cultivo.capitalize())
+
+            # Existencia: ¿el punto/centroide cae dentro del catastro?
+            _ex_txt = st.session_state.get("existencia_texto",
+                                           "Polígono catastral identificado")
+            if _en_cat:
+                st.success(f"✅ Existencia · {_ex_txt} (Depto: {predio.get('departamento','—')}).")
+            else:
+                st.warning(
+                    f"⚠️ Existencia · {_ex_txt}. El análisis se ejecutará sobre el "
+                    "polígono definido, pero el predio no figura en el catastro."
+                )
 
             st_folium(mapa_predio_simple(lat, lon, predio),
                       width=750, height=450, returned_objects=[])
-            st.caption("🟢 Polígono del predio catastral  ·  🔴 Punto ingresado")
+            st.caption("🟢 Polígono del predio  ·  🔴 Punto / centroide")
 
-            import json as _json
+            import json as _json, re as _re
+            _safe = _re.sub(r"[^A-Za-z0-9_-]+", "_", str(predio.get("codigo","predio")))
             st.download_button(
                 label="⬇️ Descargar GeoJSON del predio",
                 data=_json.dumps(predio["geojson"], ensure_ascii=False, indent=2),
-                file_name=f"predio_{predio['codigo']}.geojson",
+                file_name=f"predio_{_safe}.geojson",
                 mime="application/geo+json",
             )
 
@@ -3561,6 +3714,7 @@ with tab_validacion:
 
                     _pdf_analisis = {
                         "existencia_nivel": st.session_state.get("a1_nivel", "verde"),
+                        "existencia_texto": st.session_state.get("existencia_texto"),
                         "a1_nivel":     st.session_state.get("a2_nivel", "gris"),  # frontera
                         "a2_nivel":     st.session_state.get("a2_nivel", "gris"),
                         "gdf_frontera": st.session_state.get("gdf_frontera"),
