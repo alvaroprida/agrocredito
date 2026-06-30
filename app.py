@@ -62,7 +62,7 @@ from utils.risk_scoring   import (
     score_riesgo, INDICADORES, GRUPOS,
     SCORE_LABEL, SCORE_COLOR, SCORE_TEXT,
 )
-from utils.report_generator import generate_exante_report
+from utils.report_generator import generate_exante_report, generate_monitoring_report
 from utils.monitoring_climate     import get_monitoring_series
 from utils.monitoring_indicators  import (
     compute_all_indicators, HORIZONS,
@@ -1427,6 +1427,119 @@ with tab_monitoreo:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Reporte PDF de monitoreo ──────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📄 Reporte de Monitoreo (PDF)")
+
+        def _veg_lvl_text(ndv):
+            if ndv.get("error") or not ndv.get("last_date"):
+                return "gris", "Sin escenas NDVI"
+            _lvl = max([ndv.get("a1_sem","verde"), ndv.get("a2_sem","verde")],
+                       key=lambda s: SEM_ORDER.get(s, 0))
+            _lv, _a1p = ndv.get("last_ndvi"), ndv.get("a1_pct")
+            if _lvl == "verde":
+                return _lvl, (f"NDVI {_lv:.2f} · normal" if _lv is not None else "Normal")
+            if _lv is not None and _a1p is not None:
+                return _lvl, f"NDVI {_lv:.2f} ({_a1p:+.0f}%)"
+            return _lvl, (f"NDVI {_lv:.2f}" if _lv is not None else "Deterioro")
+
+        def _clima_lvl_text(clim, hz):
+            if clim.get("error"):
+                return "gris", "Error"
+            _h   = clim.get(hz, {})
+            _lvl = _h.get("global", "verde")
+            if _lvl == "verde":
+                return _lvl, "Normal"
+            _causas = [_IND_NOMBRES.get(_k, _k) for _k, _v in _h.items()
+                       if _k != "global" and _v
+                       and SEM_ORDER.get(_v.get("semaforo", "verde"), 0) > 0]
+            return _lvl, (", ".join(_causas) if _causas else "Alerta")
+
+        _IND_ORDER = ["B1", "B2", "B3", "C1", "C2", "D1", "E1"]
+        _rep_predios = []
+        for _rp in _portfolio:
+            _nm   = _rp["nombre_predio"]
+            _rec  = _results_map.get(_nm, {})
+            _clim = _rec.get("clima", {})
+            _ndv  = _rec.get("ndvi",  {})
+            _h0, _h7, _h14 = (_clima_lvl_text(_clim, "Hoy"),
+                              _clima_lvl_text(_clim, "+7 días"),
+                              _clima_lvl_text(_clim, "+14 días"))
+            _vl, _vt = _veg_lvl_text(_ndv)
+
+            _acc = []
+            if not _clim.get("error"):
+                for _k in _IND_ORDER:
+                    _ind = _clim.get("Hoy", {}).get(_k)
+                    if _ind and SEM_ORDER.get(_ind.get("semaforo", "verde"), 0) > 0:
+                        _acc.append(f"{_ind.get('label', _k)} — {_ind.get('action', '')}")
+            if not _ndv.get("error") and _ndv.get("last_date"):
+                if SEM_ORDER.get(_ndv.get("a1_sem", "verde"), 0) > 0:
+                    _acc.append(f"NDVI (anomalía vs. histórico) — {_A_ACT['A1'][_ndv['a1_sem']]}")
+                if SEM_ORDER.get(_ndv.get("a2_sem", "verde"), 0) > 0:
+                    _acc.append(f"NDVI (tendencia a la baja) — {_A_ACT['A2'][_ndv['a2_sem']]}")
+
+            _ndd = None
+            if not _ndv.get("error") and _ndv.get("last_date"):
+                _ndd = {
+                    "ndvi":  round(_ndv["last_ndvi"], 3) if _ndv.get("last_ndvi") is not None else None,
+                    "anom":  round(_ndv["a1_pct"], 1)    if _ndv.get("a1_pct")    is not None else None,
+                    "tend":  round(_ndv["a2_val"], 4)    if _ndv.get("a2_val")    is not None else None,
+                    "fecha": str(_ndv.get("last_date", ""))[:10],
+                    "n":     _ndv.get("n_scenes"),
+                }
+
+            _ci = []
+            if not _clim.get("error"):
+                for _k in _IND_ORDER:
+                    if not _clim.get("Hoy", {}).get(_k):
+                        continue
+                    _row = {"label": _clim["Hoy"][_k].get("label", _k)}
+                    for _hz in ["Hoy", "+7 días", "+14 días"]:
+                        _ih = _clim.get(_hz, {}).get(_k, {})
+                        _row[_hz] = {"sem": _ih.get("semaforo"),
+                                     "display": _ih.get("display", "—")}
+                    _ci.append(_row)
+
+            _rep_predios.append({
+                "nombre": _nm, "cultivo": _rp.get("cultivo", "—"),
+                "lat": _rp.get("lat"), "lon": _rp.get("lon"),
+                "global": _global_level(_clim, _ndv),
+                "veg": {"nivel": _vl, "text": _vt},
+                "hoy": {"nivel": _h0[0], "text": _h0[1]},
+                "f7":  {"nivel": _h7[0], "text": _h7[1]},
+                "f14": {"nivel": _h14[0], "text": _h14[1]},
+                "acciones": _acc,
+                "ndvi_detalle": _ndd,
+                "clima_indicadores": _ci,
+            })
+
+        _c1m, _c2m = st.columns([3, 2])
+        with _c1m:
+            st.caption("Pág. 1: resumen del portafolio · acciones requeridas · firmas. "
+                       "Pág. 2+: detalle NDVI y clima por predio.")
+        with _c2m:
+            if st.button("🔄 Generar PDF de monitoreo", type="primary",
+                         use_container_width=True, key="gen_pdf_mon"):
+                with st.spinner("Generando PDF…"):
+                    try:
+                        from datetime import date as _date_mon
+                        st.session_state["mon_pdf_bytes"] = generate_monitoring_report({
+                            "fecha": _date_mon.today().strftime("%d/%m/%Y"),
+                            "predios": _rep_predios,
+                        })
+                        st.success("✅ PDF listo.")
+                    except Exception as _e:
+                        import traceback
+                        st.error(f"❌ Error generando PDF: {_e}")
+                        st.code(traceback.format_exc())
+            if "mon_pdf_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Descargar PDF", data=st.session_state["mon_pdf_bytes"],
+                    file_name="reporte_monitoreo_portafolio.pdf",
+                    mime="application/pdf", key="dl_pdf_mon", use_container_width=True,
+                )
 
     else:
         st.markdown("---")

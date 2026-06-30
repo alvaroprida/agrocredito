@@ -870,3 +870,267 @@ def generate_exante_report(
         bytes listos para st.download_button
     """
     return _build_pdf(datos, predio, analisis)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REPORTE DE MONITOREO DE PORTAFOLIO
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MON_LBL = {"verde": "Normal", "amarillo": "Precaución",
+            "rojo": "Alerta", "gris": "—"}
+
+
+def _build_monitoring_pdf(data: dict) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        HRFlowable, KeepTogether, PageBreak,
+    )
+
+    W, H = A4
+    buf  = BytesIO()
+    predios = data.get("predios", [])
+    fecha   = data.get("fecha", "")
+    n       = len(predios)
+    n_alert = sum(1 for p in predios if p.get("global", "verde") != "verde")
+
+    _nn = [0]
+    def _sty(base="s", **kw):
+        _nn[0] += 1
+        d = dict(fontName="Helvetica", fontSize=9, textColor=_hex(C.DARK), leading=13)
+        d.update(kw)
+        return ParagraphStyle(f"_m{_nn[0]}_{base}", **d)
+
+    S = {
+        "title": _sty("title", fontName="Helvetica-Bold", fontSize=18, textColor=_hex(C.DARK)),
+        "sub":   _sty("sub", fontSize=9, textColor=_hex(C.SUBTEXT)),
+        "h2":    _sty("h2", fontName="Helvetica-Bold", fontSize=11, textColor=_hex(C.DARK),
+                      spaceBefore=6, spaceAfter=3),
+        "h3":    _sty("h3", fontName="Helvetica-Bold", fontSize=9.5, textColor=_hex(C.MID),
+                      spaceBefore=4, spaceAfter=2),
+        "body":  _sty("body"),
+        "small": _sty("small", fontSize=7.5, textColor=_hex(C.SUBTEXT), fontName="Helvetica-Oblique"),
+        "th":    _sty("th", fontName="Helvetica-Bold", fontSize=8, textColor=_hex(C.WHITE),
+                      alignment=TA_CENTER),
+        "td":    _sty("td", fontSize=8, leading=11),
+        "td_c":  _sty("td_c", fontSize=8, leading=11, alignment=TA_CENTER),
+        "td_sm": _sty("td_sm", fontSize=7.3, leading=9.5),
+    }
+
+    def P(t, st="body"): return Paragraph(str(t), S[st])
+    def SP(h=0.25):      return Spacer(1, h * cm)
+    def HR():
+        return HRFlowable(width="100%", thickness=0.5, color=_hex(C.BORDER),
+                          spaceAfter=3, spaceBefore=3)
+
+    def _on_page(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(_hex(C.DARK)); canvas.rect(0, H - 1.1*cm, W, 1.1*cm, fill=1, stroke=0)
+        canvas.setFillColor(_hex(C.WHITE)); canvas.setFont("Helvetica-Bold", 8.5)
+        canvas.drawString(1.8*cm, H - 0.75*cm, "AgroCredito · Reporte de Monitoreo de Portafolio")
+        canvas.setFont("Helvetica", 7.5)
+        canvas.drawRightString(W - 1.8*cm, H - 0.75*cm, date.today().strftime("%d/%m/%Y"))
+        canvas.setFillColor(_hex(C.MID)); canvas.rect(0, 0, W, 0.8*cm, fill=1, stroke=0)
+        canvas.setFillColor(_hex(C.WHITE)); canvas.setFont("Helvetica", 7)
+        canvas.drawString(1.8*cm, 0.28*cm, "Confidencial · Uso interno · Generado automáticamente")
+        canvas.drawRightString(W - 1.8*cm, 0.28*cm, f"Pág. {doc.page}")
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.8*cm, rightMargin=1.8*cm,
+                            topMargin=1.8*cm, bottomMargin=1.5*cm,
+                            onFirstPage=_on_page, onLaterPages=_on_page)
+    TW = W - 3.6*cm
+
+    def _tbl(rows, cw, header=True, extra=None):
+        t = Table(rows, colWidths=cw, repeatRows=1 if header else 0)
+        base = [
+            ("TOPPADDING", (0,0), (-1,-1), 3.5), ("BOTTOMPADDING", (0,0), (-1,-1), 3.5),
+            ("LEFTPADDING", (0,0), (-1,-1), 6), ("RIGHTPADDING", (0,0), (-1,-1), 6),
+            ("GRID", (0,0), (-1,-1), 0.4, _hex(C.BORDER)), ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ]
+        if header: base += [("BACKGROUND", (0,0), (-1,0), _hex(C.MID))]
+        if extra:  base += extra
+        t.setStyle(TableStyle(base))
+        return t
+
+    story = []
+
+    # ── PORTADA ───────────────────────────────────────────────────────────────
+    story += [
+        SP(0.25),
+        P("Reporte de Monitoreo de Portafolio", "title"), SP(0.2),
+        P("Seguimiento agroclimático y de vegetación durante la vida del crédito · Colombia", "sub"),
+        SP(0.22), HR(), SP(0.12),
+    ]
+
+    ficha = _tbl([
+        [P("<b>Fecha del monitoreo</b>","td"), P(fecha,"td"),
+         P("<b>Predios monitoreados</b>","td"), P(str(n),"td")],
+        [P("<b>Predios con alerta</b>","td"),
+         P(f"{n_alert} de {n}" + (" 🔴" if n_alert else ""),"td"),
+         P("<b>Fuentes</b>","td"),
+         P("Sentinel-2 (GEE) · ERA5 (Open-Meteo)","td")],
+    ], cw=[TW*0.22, TW*0.28, TW*0.22, TW*0.28], header=False,
+       extra=[("BACKGROUND",(0,0),(0,-1),_hex(C.LIGHT)),
+              ("BACKGROUND",(2,0),(2,-1),_hex(C.LIGHT))])
+    story += [ficha, SP(0.2)]
+
+    # ── RESUMEN DE MONITOREO (todos los predios) ───────────────────────────────
+    story.append(P("Resumen de Monitoreo · Portafolio", "h2"))
+    story.append(P("La Alerta Global es el peor estado actual entre Vegetación (Hoy) y "
+                   "Clima (Hoy). El forecast (+7/+14 días) es anticipación.", "small"))
+
+    hdr = [P("Predio","th"), P("Cultivo","th"), P("Alerta Global","th"),
+           P("Vegetación (Hoy)","th"), P("Clima (Hoy)","th"),
+           P("Clima +7d","th"), P("Clima +14d","th")]
+    rows = [hdr]; extra = []
+    for i, p in enumerate(predios):
+        r = i + 1
+        gl = p.get("global", "gris")
+        rows.append([
+            P(p.get("nombre","—"), "td"),
+            P(p.get("cultivo","—"), "td_sm"),
+            P(_MON_LBL.get(gl, "—"), "td_c"),
+            P(p.get("veg", {}).get("text","—"), "td_sm"),
+            P(p.get("hoy", {}).get("text","—"), "td_sm"),
+            P(p.get("f7", {}).get("text","—"), "td_sm"),
+            P(p.get("f14", {}).get("text","—"), "td_sm"),
+        ])
+        # Color de la celda Alerta Global (col 2) destacada
+        extra += [
+            ("BACKGROUND", (2, r), (2, r), _hex(_SEM_BG.get(gl, C.GREY_BG))),
+            ("TEXTCOLOR",  (2, r), (2, r), _hex(_SEM_FG.get(gl, C.SUBTEXT))),
+            ("FONTNAME",   (2, r), (2, r), "Helvetica-Bold"),
+            ("BACKGROUND", (3, r), (3, r), _hex(_SEM_BG.get(p.get("veg",{}).get("nivel"), C.WHITE))),
+            ("BACKGROUND", (4, r), (4, r), _hex(_SEM_BG.get(p.get("hoy",{}).get("nivel"), C.WHITE))),
+            ("BACKGROUND", (5, r), (5, r), _hex(_SEM_BG.get(p.get("f7",{}).get("nivel"), C.WHITE))),
+            ("BACKGROUND", (6, r), (6, r), _hex(_SEM_BG.get(p.get("f14",{}).get("nivel"), C.WHITE))),
+        ]
+    story.append(_tbl(rows, cw=[TW*0.17, TW*0.11, TW*0.12, TW*0.20,
+                                TW*0.16, TW*0.12, TW*0.12], extra=extra))
+    story += [SP(0.25), HR()]
+
+    # ── ACCIONES REQUERIDAS ─────────────────────────────────────────────────────
+    story.append(P("Acciones Requeridas", "h2"))
+    _acc_rows = [[P("Predio","th"), P("Acción recomendada","th")]]
+    _any = False
+    for p in predios:
+        for a in p.get("acciones", []):
+            _acc_rows.append([P(p.get("nombre","—"), "td"), P(a, "td")])
+            _any = True
+    if _any:
+        story.append(_tbl(_acc_rows, cw=[TW*0.24, TW*0.76]))
+    else:
+        story.append(P("✅ Ningún predio requiere acción — todo el portafolio en estado normal.", "body"))
+    story += [SP(0.22)]
+
+    # ── APROBACIÓN Y FIRMAS ─────────────────────────────────────────────────────
+    _und = "____________________"
+    firma = Table([
+        [P("<b>Responsable de Monitoreo</b>","td_c"), P("<b>Analista de Crédito</b>","td_c"),
+         P("<b>Gerente de Área</b>","td_c")],
+        [P(" ","td_c"), P(" ","td_c"), P(" ","td_c")],
+        [P(_und,"td_c"), P(_und,"td_c"), P(_und,"td_c")],
+        [P(f"Nombre: {_und}","small"), P(f"Nombre: {_und}","small"), P(f"Nombre: {_und}","small")],
+        [P(f"Fecha:  {_und}","small"), P(f"Fecha:  {_und}","small"), P(f"Fecha:  {_und}","small")],
+    ], colWidths=[TW/3]*3, rowHeights=[0.5*cm, 0.7*cm, 0.28*cm, 0.4*cm, 0.4*cm])
+    firma.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),_hex(C.LIGHT)),
+        ("TOPPADDING",(0,0),(-1,-1),3), ("BOTTOMPADDING",(0,0),(-1,-1),3),
+        ("LEFTPADDING",(0,0),(-1,-1),8), ("RIGHTPADDING",(0,0),(-1,-1),8),
+        ("VALIGN",(0,0),(-1,0),"MIDDLE"), ("VALIGN",(0,1),(-1,-1),"BOTTOM"),
+        ("ALIGN",(0,0),(-1,0),"CENTER"),
+    ]))
+    story += [KeepTogether([P("Aprobación y Firmas", "h2"), firma])]
+
+    # ── PÁGINA 2+ · DETALLE POR PREDIO ──────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(P("Análisis detallado por predio", "h2"))
+    story.append(P("Vegetación NDVI y clima (Hoy / +7 / +14 días) para cada predio del portafolio.", "small"))
+
+    for p in predios:
+        gl = p.get("global", "gris")
+        _hdr_bg = _SEM_BG.get(gl, C.GREY_BG); _hdr_fg = _SEM_FG.get(gl, C.DARK)
+        _hp = _sty("hp", fontName="Helvetica-Bold", fontSize=10.5, textColor=_hex(_hdr_fg))
+        _cab = Table([[Paragraph(
+            f"{p.get('nombre','—')} · {p.get('cultivo','—')} — Alerta: {_MON_LBL.get(gl,'—')}", _hp)]],
+            colWidths=[TW])
+        _cab.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),_hex(_hdr_bg)),
+                                  ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+                                  ("LEFTPADDING",(0,0),(-1,-1),10)]))
+        story += [SP(0.15), _cab, SP(0.12)]
+
+        # NDVI
+        nd = p.get("ndvi_detalle")
+        story.append(P("Vegetación · NDVI (Sentinel-2 · GEE)", "h3"))
+        if nd:
+            _fmt = lambda v, s="": ("—" if v is None else f"{v}{s}")
+            story.append(_tbl([
+                [P("NDVI último","th"), P("Anomalía vs. mes","th"), P("Tendencia","th"),
+                 P("Última escena","th"), P("N° escenas (1a)","th")],
+                [P(_fmt(nd.get('ndvi')), "td_c"),
+                 P(_fmt(nd.get('anom'), " %"), "td_c"),
+                 P(_fmt(nd.get('tend')), "td_c"),
+                 P(_fmt(nd.get('fecha')), "td_c"),
+                 P(_fmt(nd.get('n')), "td_c")],
+            ], cw=[TW*0.2]*5))
+        else:
+            story.append(P("Sin escenas NDVI válidas en el último año.", "small"))
+        story.append(SP(0.12))
+
+        # Clima por indicador y horizonte
+        story.append(P("Clima · indicadores por horizonte", "h3"))
+        inds = p.get("clima_indicadores", [])
+        if inds:
+            chdr = [P("Indicador","th"), P("Hoy","th"), P("+7 días","th"), P("+14 días","th")]
+            crows = [chdr]; cextra = []
+            for j, ind in enumerate(inds):
+                rr = j + 1
+                crows.append([
+                    P(ind.get("label","—"), "td_sm"),
+                    P(ind.get("Hoy",{}).get("display","—"), "td_sm"),
+                    P(ind.get("+7 días",{}).get("display","—"), "td_sm"),
+                    P(ind.get("+14 días",{}).get("display","—"), "td_sm"),
+                ])
+                for ci, hz in [(1,"Hoy"),(2,"+7 días"),(3,"+14 días")]:
+                    _s = ind.get(hz,{}).get("sem")
+                    if _s:
+                        cextra.append(("BACKGROUND",(ci,rr),(ci,rr),_hex(_SEM_BG.get(_s, C.WHITE))))
+            story.append(_tbl(crows, cw=[TW*0.34, TW*0.22, TW*0.22, TW*0.22], extra=cextra))
+        else:
+            story.append(P("Sin datos climáticos para este predio.", "small"))
+        story += [SP(0.15), HR()]
+
+    # ── NOTA LEGAL ──────────────────────────────────────────────────────────────
+    story.append(P(
+        "Reporte de monitoreo generado automáticamente por AgroCredito a partir de datos "
+        "satelitales y climáticos de acceso público. Las alertas son indicativas y deben "
+        "validarse con contacto al productor o visita técnica. "
+        "Fuentes: Sentinel-2 SR (Google Earth Engine), ERA5 (Open-Meteo).",
+        "small",
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def generate_monitoring_report(data: dict) -> bytes:
+    """
+    Genera el reporte de monitoreo de portafolio en PDF (mismo estilo que el ex-ante).
+
+    `data` = {
+        "fecha": "DD/MM/YYYY",
+        "predios": [
+            {"nombre","cultivo","lat","lon","global",
+             "veg":{"nivel","text"}, "hoy":{...}, "f7":{...}, "f14":{...},
+             "acciones":[str,...],
+             "ndvi_detalle":{"ndvi","anom","tend","fecha","n"} | None,
+             "clima_indicadores":[{"label","Hoy":{"sem","display"},"+7 días":{...},"+14 días":{...}}]},
+            ...
+        ],
+    }
+    """
+    return _build_monitoring_pdf(data)
