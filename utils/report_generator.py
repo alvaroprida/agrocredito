@@ -333,7 +333,7 @@ def _build_pdf(
     story += [
         SP(0.25),
         P("Reporte de Evaluación Ex-Ante", "title"),
-        SP(0.2),
+        SP(0.45),
         P("Evaluación agroclimática y productiva para decisiones de crédito agrícola · Colombia", "sub"),
         SP(0.22), HR(), SP(0.1),
     ]
@@ -961,7 +961,7 @@ def _build_monitoring_pdf(data: dict) -> bytes:
     # ── PORTADA ───────────────────────────────────────────────────────────────
     story += [
         SP(0.25),
-        P("Reporte de Monitoreo de Portafolio", "title"), SP(0.2),
+        P("Reporte de Monitoreo de Portafolio", "title"), SP(0.45),
         P("Seguimiento agroclimático y de vegetación durante la vida del crédito · Colombia", "sub"),
         SP(0.22), HR(), SP(0.12),
     ]
@@ -999,17 +999,24 @@ def _build_monitoring_pdf(data: dict) -> bytes:
             P(p.get("f7", {}).get("text","—"), "td_sm"),
             P(p.get("f14", {}).get("text","—"), "td_sm"),
         ])
-        # Color de la celda Alerta Global (col 2) destacada
+        # Celda Alerta Global (col 2) — destacada (color + fuente mayor en negrita)
         extra += [
             ("BACKGROUND", (2, r), (2, r), _hex(_SEM_BG.get(gl, C.GREY_BG))),
             ("TEXTCOLOR",  (2, r), (2, r), _hex(_SEM_FG.get(gl, C.SUBTEXT))),
             ("FONTNAME",   (2, r), (2, r), "Helvetica-Bold"),
+            ("FONTSIZE",   (2, r), (2, r), 9.5),
             ("BACKGROUND", (3, r), (3, r), _hex(_SEM_BG.get(p.get("veg",{}).get("nivel"), C.WHITE))),
             ("BACKGROUND", (4, r), (4, r), _hex(_SEM_BG.get(p.get("hoy",{}).get("nivel"), C.WHITE))),
             ("BACKGROUND", (5, r), (5, r), _hex(_SEM_BG.get(p.get("f7",{}).get("nivel"), C.WHITE))),
             ("BACKGROUND", (6, r), (6, r), _hex(_SEM_BG.get(p.get("f14",{}).get("nivel"), C.WHITE))),
         ]
-    story.append(_tbl(rows, cw=[TW*0.17, TW*0.11, TW*0.12, TW*0.20,
+    # Enmarca la columna Alerta Global (cabecera + filas) para que resalte
+    _lastr = len(predios)
+    extra += [
+        ("LINEBEFORE", (2, 0), (2, _lastr), 1.6, _hex(C.DARK)),
+        ("LINEAFTER",  (2, 0), (2, _lastr), 1.6, _hex(C.DARK)),
+    ]
+    story.append(_tbl(rows, cw=[TW*0.17, TW*0.10, TW*0.15, TW*0.18,
                                 TW*0.16, TW*0.12, TW*0.12], extra=extra))
     story += [SP(0.25), HR()]
 
@@ -1056,7 +1063,7 @@ def _build_monitoring_pdf(data: dict) -> bytes:
         _hdr_bg = _SEM_BG.get(gl, C.GREY_BG); _hdr_fg = _SEM_FG.get(gl, C.DARK)
         _hp = _sty("hp", fontName="Helvetica-Bold", fontSize=10.5, textColor=_hex(_hdr_fg))
         _cab = Table([[Paragraph(
-            f"{p.get('nombre','—')} · {p.get('cultivo','—')} — Alerta: {_MON_LBL.get(gl,'—')}", _hp)]],
+            f"{p.get('nombre','—')} · {p.get('cultivo','—')} — Alerta Global: {_MON_LBL.get(gl,'—')}", _hp)]],
             colWidths=[TW])
         _cab.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),_hex(_hdr_bg)),
                                   ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
