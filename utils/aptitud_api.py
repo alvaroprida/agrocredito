@@ -18,7 +18,8 @@ Metodología:
        score  < 0.40 → Baja
 
 Cultivos sin API disponible en datos.gov.co:
-  Durazno, Guayaba, Limón, Lulo, Mora, Naranja, Plátano, Uchuva
+  Durazno, Guayaba, Limón, Lulo, Mora, Naranja, Uchuva
+Nota: Plátano se consulta bajo el nombre "Banano (exportación)" en la API UPRA.
 """
 
 import requests
@@ -30,18 +31,19 @@ from shapely import wkt as swkt
 # Para cultivos con Semestre I y II se usa Semestre II.
 
 CULTIVO_API_MAP: dict[str, str] = {
-    "Aguacate (Hass)": "https://www.datos.gov.co/resource/tx7u-frn2.json",
-    "Cacao":           "https://www.datos.gov.co/resource/jdjx-qer4.json",
-    "Café":            "https://www.datos.gov.co/resource/kwvf-nwea.json",
-    "Cebolla":         "https://www.datos.gov.co/resource/nxvg-ufyf.json",  # Sem II
-    "Fresa":           "https://www.datos.gov.co/resource/emsg-94di.json",
-    "Granadilla":      "https://www.datos.gov.co/resource/aikj-ub3k.json",
-    "Gulupa":          "https://www.datos.gov.co/resource/q6xp-whkm.json",
-    "Maíz":            "https://www.datos.gov.co/resource/tzga-4zse.json",  # Sem II
-    "Mango":           "https://www.datos.gov.co/resource/xt32-m7dh.json",
-    "Maracuyá":        "https://www.datos.gov.co/resource/hxs5-w7gt.json",
-    "Papa":            "https://www.datos.gov.co/resource/s455-c4e6.json",  # Sem II
-    "Piña":            "https://www.datos.gov.co/resource/8fa5-z4v3.json",
+    "Aguacate (Hass)":     "https://www.datos.gov.co/resource/tx7u-frn2.json",
+    "Banano (exportación)":"https://www.datos.gov.co/resource/rcfj-3e57.json",
+    "Cacao":               "https://www.datos.gov.co/resource/jdjx-qer4.json",
+    "Café":                "https://www.datos.gov.co/resource/kwvf-nwea.json",
+    "Cebolla":             "https://www.datos.gov.co/resource/nxvg-ufyf.json",  # Sem II
+    "Fresa":               "https://www.datos.gov.co/resource/emsg-94di.json",
+    "Granadilla":          "https://www.datos.gov.co/resource/aikj-ub3k.json",
+    "Gulupa":              "https://www.datos.gov.co/resource/q6xp-whkm.json",
+    "Maíz":                "https://www.datos.gov.co/resource/tzga-4zse.json",  # Sem II
+    "Mango":               "https://www.datos.gov.co/resource/xt32-m7dh.json",
+    "Maracuyá":            "https://www.datos.gov.co/resource/hxs5-w7gt.json",
+    "Papa":                "https://www.datos.gov.co/resource/s455-c4e6.json",  # Sem II
+    "Piña":                "https://www.datos.gov.co/resource/8fa5-z4v3.json",
 }
 
 # ── Pesos por categoría de aptitud ────────────────────────────────────────────

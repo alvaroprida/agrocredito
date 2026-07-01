@@ -11,8 +11,12 @@ APIs utilizadas (gratuitas, sin API key):
 """
 
 import time
+import warnings
 import requests
+import urllib3
 import polyline as _polyline
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 
@@ -39,7 +43,7 @@ def _overpass_get(query: str) -> list:
     for intento in range(REINTENTOS_OVERPASS):
         try:
             resp = requests.get(OVERPASS_URL, params={"data": query},
-                                headers=headers, timeout=90)
+                                headers=headers, timeout=90, verify=False)
         except requests.exceptions.Timeout:
             espera = PAUSA_OVERPASS_SEG * (2 ** intento)
             time.sleep(espera)
@@ -87,7 +91,7 @@ def _get_ruta_osrm(lat1, lon1, lat2, lon2) -> dict | None:
     url = f"{OSRM_URL}/{lon1},{lat1};{lon2},{lat2}"
     try:
         resp = requests.get(url, params={"overview": "full", "geometries": "polyline"},
-                            timeout=15)
+                            timeout=15, verify=False)
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != "Ok" or not data.get("routes"):

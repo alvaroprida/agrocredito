@@ -39,17 +39,21 @@ def _init_gee():
     import streamlit as st
 
     sa_json = st.secrets.get("gee", {}).get("service_account_json")
+    # Proyecto GCP/Earth Engine: configurable por secrets (el cliente usa el suyo
+    # sin tocar código). Prioridad: [gee] project → project dentro del JSON → default.
+    proj = st.secrets.get("gee", {}).get("project") or GEE_PROJECT
     if sa_json:
         sa_dict = json.loads(sa_json) if isinstance(sa_json, str) else dict(sa_json)
+        proj = st.secrets.get("gee", {}).get("project") or sa_dict.get("project_id") or GEE_PROJECT
         credentials = ee.ServiceAccountCredentials(
             email=sa_dict["client_email"],
             key_data=json.dumps(sa_dict),
         )
-        ee.Initialize(credentials=credentials, project=GEE_PROJECT)
+        ee.Initialize(credentials=credentials, project=proj)
     else:
-        # Local fallback: requires prior `earthengine authenticate --project agricolombia`
+        # Fallback local: requiere `earthengine authenticate` previo
         try:
-            ee.Initialize(project=GEE_PROJECT)
+            ee.Initialize(project=proj)
         except Exception:
             raise RuntimeError(
                 "No se encontraron credenciales GEE. "
