@@ -102,13 +102,9 @@ app funciona en **modo demo** (ver más abajo).
 
 1. En **Supabase** → **New project** (elige región y contraseña de BD; anótala).
 2. **Database → Extensions** → habilita **`postgis`**.
-3. Carga los datos de predios que te ha entregado el equipo:
-   - El equipo proporciona por separado el **volcado de datos** (tabla `predios`
-     de Cundinamarca, y `construcciones` si aplica).
-   - Cárgalo desde **SQL Editor** (pega el `.sql`) o con una herramienta GIS
-     (p. ej. QGIS → *DB Manager*) apuntando a la conexión de Supabase.
-   - La tabla `predios` debe tener al menos: `codigo`, `departamento`,
-     `municipio`, `area_ha` y la geometría `wkb_geometry`.
+3. Carga la base de datos espacial que te ha entregado el equipo (predios y
+   capas de referencia). El procedimiento completo de **volcado y carga a tu
+   Supabase de AGRAPP** está en el **Anexo A** (al final de esta guía).
 4. Copia la **cadena de conexión**: **Project Settings → Database →
    Connection string → URI**. Tendrá la forma
    `postgresql://postgres:TU_PASSWORD@db.TU_PROYECTO.supabase.co:5432/postgres`
@@ -192,6 +188,72 @@ Para probar la app sin Supabase:
 - Mantén el repositorio en **privado**.
 - Si una credencial se expone, revócala y genera una nueva (Google Cloud /
   Supabase) y actualiza los *Secrets*.
+
+---
+
+## Anexo A · Volcado y carga de la base de datos PostGIS (a Supabase AGRAPP)
+
+La aplicación consulta **6 tablas espaciales** en PostGIS:
+
+| Tabla | Contenido |
+|-------|-----------|
+| `predios` | Polígonos catastrales (geometría `wkb_geometry`) |
+| `construcciones_mvp` | Construcciones dentro de los predios |
+| `frontera_mvp` | Frontera agrícola nacional |
+| `aptitud_cafe_mvp` | Zonificación de aptitud para café |
+| `aptitud_platano_mvp` | Zonificación de aptitud para plátano |
+| `ufh_mvp` | Unidades de valor potencial del suelo (UFH) |
+
+Estos son los pasos para **trasladar toda la base de datos** desde el origen que
+te entrega el equipo hacia **tu cuenta Supabase de AGRAPP**.
+
+### A.1 · Requisitos
+- Herramientas cliente de PostgreSQL (`pg_dump`, `psql`, `pg_restore`).
+  - **macOS:** `brew install libpq` y añade `libpq` al `PATH`.
+  - **Windows/Linux:** instala «PostgreSQL client tools».
+- La **cadena de conexión de ORIGEN** (te la entrega el equipo) y la de
+  **DESTINO** (tu Supabase de AGRAPP, del Paso 4.4).
+
+### A.2 · Volcar la base de datos de ORIGEN
+Vuelca todo el esquema `public` (excluyendo la tabla de sistema de PostGIS):
+
+```bash
+pg_dump "postgresql://USUARIO:PASSWORD@HOST_ORIGEN:5432/postgres" \
+  --no-owner --no-privileges \
+  --schema=public \
+  --exclude-table=public.spatial_ref_sys \
+  -Fc -f agrapp_postgis.dump
+```
+
+Se genera el archivo **`agrapp_postgis.dump`** (contiene esquema + datos de las
+6 tablas y cualquier otra del esquema `public`).
+
+### A.3 · Preparar el DESTINO (Supabase AGRAPP)
+1. Crea el proyecto Supabase (Paso 4.1) y **habilita la extensión `postgis`**
+   (Paso 4.2). Esto debe hacerse **antes** de restaurar.
+
+### A.4 · Restaurar en el DESTINO
+```bash
+pg_restore --no-owner --no-privileges \
+  -d "postgresql://postgres:TU_PASSWORD@db.TU_PROYECTO.supabase.co:5432/postgres" \
+  agrapp_postgis.dump
+```
+Si aparecen avisos sobre `postgis` o `spatial_ref_sys` (ya existen porque
+habilitaste la extensión), son **normales y se pueden ignorar**.
+
+### A.5 · Verificar la carga
+En Supabase → **SQL Editor**, ejecuta:
+```sql
+select table_name from information_schema.tables
+  where table_schema = 'public' order by 1;
+select count(*) from predios;
+select postgis_full_version();
+```
+Debes ver las 6 tablas listadas y un recuento de filas en `predios`.
+
+> **Alternativa (SQL plano):** si prefieres un `.sql` legible en lugar del
+> formato binario, usa `-Fp -f agrapp_postgis.sql` en el volcado y restaura con
+> `psql "URL_DESTINO" -f agrapp_postgis.sql`.
 
 ---
 
