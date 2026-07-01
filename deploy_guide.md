@@ -100,11 +100,16 @@ Cloud** con la Earth Engine API y una **cuenta de servicio**.
 Necesario solo para consultar **predios reales** del catastro. Si lo saltas, la
 app funciona en **modo demo** (ver más abajo).
 
-1. En **Supabase** → **New project** (elige región y contraseña de BD; anótala).
+1. En **Supabase** → **New project**:
+   - ⚠️ **Región: elige una de EE. UU.** (p. ej. *East US · North Virginia*).
+     **Streamlit Community Cloud se ejecuta en EE. UU.**, por lo que una base de
+     datos en EE. UU. minimiza la latencia de cada consulta. Evita regiones
+     lejanas (p. ej. São Paulo), que ralentizan notablemente la app.
+   - Define y **anota** la contraseña de la base de datos.
 2. **Database → Extensions** → habilita **`postgis`**.
-3. Carga la base de datos espacial que te ha entregado el equipo (predios y
-   capas de referencia). El procedimiento completo de **volcado y carga a tu
-   Supabase de AGRAPP** está en el **Anexo A** (al final de esta guía).
+3. **Carga la base de datos incluida en el zip.** El paquete trae el archivo
+   `datos/db/agrapp_postgis.dump` con las tablas ya preparadas. Sigue el
+   **Anexo A** (al final de esta guía) para subirlo a tu Supabase.
 4. Copia la **cadena de conexión**: **Project Settings → Database →
    Connection string → URI**. Tendrá la forma
    `postgresql://postgres:TU_PASSWORD@db.TU_PROYECTO.supabase.co:5432/postgres`
@@ -191,69 +196,58 @@ Para probar la app sin Supabase:
 
 ---
 
-## Anexo A · Volcado y carga de la base de datos PostGIS (a Supabase AGRAPP)
+## Anexo A · Cargar la base de datos en tu Supabase
 
-La aplicación consulta **6 tablas espaciales** en PostGIS:
+El paquete (zip) incluye la base de datos ya preparada en el archivo:
+
+```
+datos/db/agrapp_postgis.dump
+```
+
+Contiene las tablas espaciales que usa la aplicación:
 
 | Tabla | Contenido |
 |-------|-----------|
 | `predios` | Polígonos catastrales (geometría `wkb_geometry`) |
 | `construcciones_mvp` | Construcciones dentro de los predios |
 | `frontera_mvp` | Frontera agrícola nacional |
-| `aptitud_cafe_mvp` | Zonificación de aptitud para café |
-| `aptitud_platano_mvp` | Zonificación de aptitud para plátano |
-| `ufh_mvp` | Unidades de valor potencial del suelo (UFH) |
 
-Estos son los pasos para **trasladar toda la base de datos** desde el origen que
-te entrega el equipo hacia **tu cuenta Supabase de AGRAPP**.
+*(La tabla de sistema `spatial_ref_sys` la crea automáticamente la extensión
+PostGIS al habilitarla, por lo que no necesita cargarse.)*
+
+Solo tienes que **restaurar este archivo en tu proyecto Supabase**:
 
 ### A.1 · Requisitos
-- Herramientas cliente de PostgreSQL (`pg_dump`, `psql`, `pg_restore`).
+- Herramienta cliente **`pg_restore`** (viene con las «PostgreSQL client tools»).
   - **macOS:** `brew install libpq` y añade `libpq` al `PATH`.
-  - **Windows/Linux:** instala «PostgreSQL client tools».
-- La **cadena de conexión de ORIGEN** (te la entrega el equipo) y la de
-  **DESTINO** (tu Supabase de AGRAPP, del Paso 4.4).
+  - **Windows:** instala «PostgreSQL» (incluye las client tools).
+- Haber creado el proyecto Supabase **con región de EE. UU.** (Paso 4.1) y
+  **habilitado la extensión `postgis`** (Paso 4.2) **antes** de restaurar.
 
-### A.2 · Volcar la base de datos de ORIGEN
-Vuelca todo el esquema `public` (excluyendo la tabla de sistema de PostGIS):
+### A.2 · Restaurar el archivo en Supabase
+Desde la carpeta descomprimida, ejecuta (sustituyendo tu contraseña y proyecto):
 
-```bash
-pg_dump "postgresql://USUARIO:PASSWORD@HOST_ORIGEN:5432/postgres" \
-  --no-owner --no-privileges \
-  --schema=public \
-  --exclude-table=public.spatial_ref_sys \
-  -Fc -f agrapp_postgis.dump
-```
-
-Se genera el archivo **`agrapp_postgis.dump`** (contiene esquema + datos de las
-6 tablas y cualquier otra del esquema `public`).
-
-### A.3 · Preparar el DESTINO (Supabase AGRAPP)
-1. Crea el proyecto Supabase (Paso 4.1) y **habilita la extensión `postgis`**
-   (Paso 4.2). Esto debe hacerse **antes** de restaurar.
-
-### A.4 · Restaurar en el DESTINO
 ```bash
 pg_restore --no-owner --no-privileges \
   -d "postgresql://postgres:TU_PASSWORD@db.TU_PROYECTO.supabase.co:5432/postgres" \
-  agrapp_postgis.dump
+  datos/db/agrapp_postgis.dump
 ```
+
 Si aparecen avisos sobre `postgis` o `spatial_ref_sys` (ya existen porque
 habilitaste la extensión), son **normales y se pueden ignorar**.
 
-### A.5 · Verificar la carga
+### A.3 · Verificar la carga
 En Supabase → **SQL Editor**, ejecuta:
 ```sql
 select table_name from information_schema.tables
   where table_schema = 'public' order by 1;
 select count(*) from predios;
-select postgis_full_version();
+select count(*) from construcciones_mvp;
+select count(*) from frontera_mvp;
 ```
-Debes ver las 6 tablas listadas y un recuento de filas en `predios`.
+Debes ver las 3 tablas y un recuento de filas mayor que cero.
 
-> **Alternativa (SQL plano):** si prefieres un `.sql` legible en lugar del
-> formato binario, usa `-Fp -f agrapp_postgis.sql` en el volcado y restaura con
-> `psql "URL_DESTINO" -f agrapp_postgis.sql`.
+Con esto, tu `DATABASE_URL` (Paso 6) ya apunta a una base con datos reales.
 
 ---
 
