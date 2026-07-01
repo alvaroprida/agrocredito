@@ -3052,7 +3052,7 @@ with tab_validacion:
 
     with st.expander("🏔️ B3 · Altitud del predio vs. cultivo declarado", expanded=True):
         import os as _os_alt
-        _ALT_XLSX = _os_alt.path.join(_os_alt.path.dirname(__file__), "data", "rangos_altitud_cultivos.xlsx")
+        _ALT_XLSX = _os_alt.path.join(_os_alt.path.dirname(__file__), "datos", "indicadores", "rangos_altitud_cultivos.xlsx")
         try:
             _df_alt = pd.read_excel(_ALT_XLSX)
         except Exception as _e_alt:
