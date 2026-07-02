@@ -75,6 +75,11 @@ _DEFAULT_CFG: dict = {
     "wind_ms": None, "disease": None,
 }
 
+# Cultivos con parametrización específica de monitoreo (umbrales térmicos/hídricos
+# y plaga por cultivo). El nombre debe escribirse exactamente así en la columna
+# `cultivo` del Excel de portafolio. El resto de cultivos se evalúa con _DEFAULT_CFG.
+CULTIVOS_MONITOREO: list[str] = list(_CROP_CFG.keys())
+
 def _cfg(cultivo: str) -> dict:
     if cultivo in _CROP_CFG:
         return _CROP_CFG[cultivo]

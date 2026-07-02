@@ -67,6 +67,7 @@ from utils.monitoring_climate     import get_monitoring_series
 from utils.monitoring_indicators  import (
     compute_all_indicators, HORIZONS,
     SEM_ICON, SEM_BG, SEM_BD, SEM_TEXT, SEM_ORDER,
+    CULTIVOS_MONITOREO,
 )
 import io
 import json
@@ -987,6 +988,12 @@ with tab_monitoreo:
     st.caption(
         "Indicadores climáticos y productivos en tiempo real por predio activo. "
         "Detecta señales de estrés antes de que se materialicen en mora."
+    )
+    st.caption(
+        "Cultivos con parametrización específica (use el nombre exacto en la columna "
+        "**cultivo** del Excel): "
+        + " · ".join(CULTIVOS_MONITOREO)
+        + ". El resto de cultivos se evalúa con umbrales genéricos."
     )
 
     # ── Gestión del portafolio ────────────────────────────────────────────────
@@ -2045,6 +2052,13 @@ ERA5 reciente (hasta t−6d) + Forecast (t−6d a t+14d) → serie combinada con
 
 La serie combinada es continua sin saltos y cubre todos los horizontes de análisis.
 """)
+            st.markdown(
+                "**Cultivos con parametrización específica**\n\n"
+                "El monitoreo aplica umbrales térmicos/hídricos y plaga ajustados por "
+                "cultivo para: **" + " · ".join(CULTIVOS_MONITOREO) + "**. "
+                "El nombre debe escribirse exactamente así en la columna `cultivo` del "
+                "Excel de portafolio; el resto de cultivos se evalúa con umbrales genéricos."
+            )
         with c2:
             st.markdown("""
 **Tres horizontes temporales**
