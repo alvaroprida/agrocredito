@@ -18,7 +18,7 @@ env/
 Thumbs.db
 
 # Base de datos (se restaura en Supabase; NO subir a GitHub — supera 100 MB)
-datos/db/
+db/
 *.dump
 
 # Datos locales / temporales

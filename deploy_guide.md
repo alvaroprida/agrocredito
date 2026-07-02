@@ -21,11 +21,6 @@ partiendo del archivo `agrocredito.zip` entregado por el equipo.
 | 6 | Cargar las credenciales (*Secrets*) | Streamlit Cloud → Settings | Credenciales activas |
 | 7 | Verificar el funcionamiento | Navegador | Aplicación operativa |
 
-> **Prueba rápida (sin base de datos):** es posible desplegar y probar la
-> aplicación en **modo de demostración** (2 predios de ejemplo) omitiendo el
-> Paso 4. Únicamente se requiere Earth Engine (Paso 3). Para operar con predios
-> reales, complete el Paso 4.
-
 **Credenciales necesarias** (se cargan en el Paso 6):
 - `DATABASE_URL` — cadena de conexión de Supabase *(solo con base de datos real)*.
 - `[gee] project` y `[gee] service_account_json` — de Google Earth Engine *(obligatorio)*.
@@ -78,13 +73,14 @@ con el mismo correo corporativo:
 3. **Importante — qué NO se debe subir a GitHub:**
    - El archivo `.streamlit/secrets.toml` (credenciales); se cargan solo en
      Streamlit (Paso 6).
-   - La carpeta `datos/db/` (contiene la base de datos, de gran tamaño; solo se
+   - La carpeta `db/` (contiene la base de datos, de gran tamaño; solo se
      utiliza una vez para la restauración en Supabase del Paso 4 / Anexo A, y
      supera el límite de 100 MB de GitHub).
 
    El `.gitignore` incluido ya excluye ambos automáticamente si utiliza git. Si
-   sube los archivos manualmente por la web, **no arrastre la carpeta
-   `datos/db/`** ni `secrets.toml`.
+   sube los archivos manualmente por la web, **no arrastre la carpeta `db/`** ni
+   `secrets.toml`. La carpeta `db/` es independiente de `datos/`, por lo que la
+   carpeta `datos/` sí puede arrastrarse completa sin riesgo.
 
 ---
 
@@ -110,7 +106,7 @@ Cloud** con la Earth Engine API habilitada y una **cuenta de servicio**.
 ## Paso 4 · Configuración de la base de datos Supabase  (opcional)
 
 Necesaria únicamente para consultar **predios reales** del catastro. Si se
-omite, la aplicación funciona en **modo de demostración** (ver más abajo).
+omite, la aplicación funciona en **modo de demostración** (2 predios de ejemplo).
 
 1. En **Supabase**, cree un proyecto (**«New project»**):
    - **Importante — región:** seleccione una región de **EE. UU.** (p. ej.
@@ -121,7 +117,7 @@ omite, la aplicación funciona en **modo de demostración** (ver más abajo).
    - Defina y **anote** la contraseña de la base de datos.
 2. En **Database → Extensions**, habilite la extensión **`postgis`**.
 3. **Cargue la base de datos incluida en el paquete.** El zip contiene el
-   archivo `datos/db/agrapp_postgis.dump` con las tablas ya preparadas. Siga el
+   archivo `db/agrapp_postgis.dump` con las tablas ya preparadas. Siga el
    **Anexo A** (al final de esta guía) para restaurarlo en Supabase.
 4. Copie la **cadena de conexión** en **Project Settings → Database →
    Connection string → URI**, con la forma
@@ -178,17 +174,6 @@ Si se muestran resultados y mapas, el despliegue se ha completado correctamente.
 
 ---
 
-## Modo de demostración (sin base de datos)
-
-Para probar la aplicación sin Supabase:
-1. Edite `utils/postgis_client.py` y modifique
-   `USE_REAL_DB = True`  →  `USE_REAL_DB = False`.
-2. Suba el cambio a GitHub. La aplicación empleará 2 predios de ejemplo
-   (Salento y Turbo) y no requerirá `DATABASE_URL`; únicamente Earth Engine
-   (Paso 3).
-
----
-
 ## Resolución de problemas frecuentes
 
 | Síntoma | Causa probable | Solución |
@@ -227,7 +212,7 @@ Para probar la aplicación sin Supabase:
 ## Anexo A · Carga de la base de datos en Supabase
 
 El paquete incluye la base de datos ya preparada en el archivo
-`datos/db/agrapp_postgis.dump`, que contiene las tablas espaciales utilizadas
+`db/agrapp_postgis.dump`, que contiene las tablas espaciales utilizadas
 por la aplicación:
 
 | Tabla | Contenido |
@@ -257,7 +242,7 @@ contraseña y el proyecto):
 ```bash
 pg_restore --no-owner --no-privileges \
   -d "postgresql://postgres:SU_PASSWORD@db.SU_PROYECTO.supabase.co:5432/postgres" \
-  datos/db/agrapp_postgis.dump
+  db/agrapp_postgis.dump
 ```
 
 Los avisos relativos a `postgis` o `spatial_ref_sys` (ya existentes al haber
@@ -279,3 +264,29 @@ de este punto, la `DATABASE_URL` (Paso 6) apunta a una base con datos reales.
 
 *Soporte: para la carga de datos o cualquier duda de configuración, contacte con
 el equipo que le entregó la aplicación.*
+
+---
+
+## Descarga de responsabilidad
+
+Esta aplicación (**AgroCrédito**) ha sido desarrollada por AXA Climate con **fines
+exclusivamente demostrativos**, como Producto Mínimo Viable (*Minimum Viable Product,
+MVP*). Su objetivo es ilustrar capacidades técnicas y metodológicas de evaluación
+agroclimática; no constituye una herramienta operativa, financiera ni de asesoramiento,
+sino que pretende sentar las bases para el desarrollo futuro de una herramienta operativa.
+
+**AXA Climate no asume responsabilidad alguna** sobre el uso que se haga de esta
+aplicación, ni sobre los resultados, indicadores, puntuaciones de riesgo o decisiones
+—crediticias o de cualquier otra naturaleza— que se deriven de ella. Los datos, umbrales
+y modelos aquí presentados son aproximados, y **no deben utilizarse como única base para
+ninguna decisión real**. En todo caso, la aplicación es un apoyo informativo y **no
+sustituye el criterio profesional del analista de crédito** ni de ningún otro responsable
+de la decisión.
+
+Para industrializar esta solución o integrarla en un sistema operativo y sofisticado
+sería necesario, entre otros: reforzar la **seguridad y gobernanza de los datos** (cifrado,
+control de accesos, cumplimiento de normativa de protección de datos), establecer procesos
+de **validación, calibración y auditoría** de los modelos, y garantizar la **trazabilidad
+y el mantenimiento** continuos de la plataforma.
+
+El uso de esta aplicación implica la aceptación de los presentes términos.
