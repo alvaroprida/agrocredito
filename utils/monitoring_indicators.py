@@ -361,9 +361,15 @@ def _d1(df: pd.DataFrame, hist_df: pd.DataFrame, cultivo: str, end_date: date) -
         display = f"{days} días favorables (sin normal histórica)"
     else:
         pct = days / normal * 100
-        if pct > 140 or days > normal + 7:
+        # Semáforo = MÍNIMO (menos alarmante) de los dos criterios: sólo escala
+        # si se superan AMBOS umbrales, el absoluto (días) Y el porcentual (%).
+        # Esto evita falsos positivos donde la normal es baja (un +3 días real
+        # puede parecer +300 % espurio) o donde es alta (un +20 % puede ser +7
+        # días de fluctuación de fondo). Cada umbral veta la sobrerreacción del
+        # otro. Ver pestaña Metodología · D1 para la justificación completa.
+        if pct > 140 and days > normal + 7:
             sem = "rojo"
-        elif pct > 115 or days > normal + 3:
+        elif pct > 115 and days > normal + 3:
             sem = "amarillo"
         else:
             sem = "verde"

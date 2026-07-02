@@ -2177,11 +2177,33 @@ de cualquiera de las dos enfermedades (lógica OR).
 
 **Tabla de semáforo D1**
 
-| Semáforo | Criterio | Acción recomendada |
-|----------|----------|--------------------|
-| 🟢 Verde | ≤ normal + 3 días ó ≤ 115 % de la media | Sin acción. |
-| 🟡 Amarillo | Normal + 3 a + 7 días ó 115–140 % | Informar al agricultor; recomendar revisión del cultivo. |
-| 🔴 Rojo | > normal + 7 días ó > 140 % | Verificar pérdidas reportadas; activar protocolo de alivio si se documenta impacto. |
+| Semáforo | Criterio (umbral absoluto) | Criterio (umbral relativo) | Acción recomendada |
+|----------|----------------------------|----------------------------|--------------------|
+| 🟢 Verde | ≤ normal + 3 días | ≤ 115 % de la media | Sin acción. |
+| 🟡 Amarillo | normal + 3 a + 7 días | 115–140 % de la media | Informar al agricultor; recomendar revisión del cultivo. |
+| 🔴 Rojo | > normal + 7 días | > 140 % de la media | Verificar pérdidas reportadas; activar protocolo de alivio si se documenta impacto. |
+
+**Combinación de los dos umbrales — se toma el color MENOS alarmante (mínimo)**
+
+El semáforo **sólo escala de color cuando se superan *ambos* umbrales a la vez** (el absoluto en días **Y** el relativo en %). Basta con que uno de los dos indique verde para que el resultado se quede en verde. Formalmente, el color final es el `mínimo` (menos severo) del color que daría cada criterio por separado:
+
+```
+color_final = min( color_absoluto , color_relativo )
+```
+
+**Por qué el doble umbral y por qué el mínimo** — ninguna de las dos métricas es fiable por sí sola, porque la normal histórica varía muchísimo entre cultivos y zonas de Colombia:
+
+- **Sólo el % de la media** falla cuando la normal es *baja*. Ej.: normal = 2 días; un mes con 5 días es el **250 %** → 🔴 de pánico, pero son sólo 3 días extra, epidemiológicamente irrelevantes. El umbral absoluto (+3 / +7 días) veta esa falsa alarma.
+- **Sólo los días absolutos** fallan cuando la normal es *alta*. Ej.: normal = 22 días; pasar a 27 son +5 días, pero es sólo **+23 %**, una fluctuación de fondo normal. El umbral porcentual (115 % / 140 %) veta esa falsa alarma.
+
+**Ejemplo (Café · Roya, normal = 10 días):**
+
+| Días este mes | Δ absoluto → color | % media → color | Semáforo final (mín.) |
+|---------------|--------------------|-----------------|-----------------------|
+| 12 | +2 → 🟢 | 120 % → 🟡 | **🟢** (el +2 real es ruido de fondo) |
+| 18 | +8 → 🔴 | 180 % → 🔴 | **🔴** (ambos coinciden en alarma real) |
+
+> **Nota de diseño**: esta regla prioriza *no generar ruido* sobre la detección precoz. El sistema es deliberadamente **específico, no sensible**: en normales muy bajas, un brote incipiente real puede quedar en verde.
 """)
 
     with st.expander("💨 E · Viento (cultivos susceptibles)", expanded=True):
