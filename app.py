@@ -2273,6 +2273,17 @@ con los de Validación Pre-Crédito (Tab 1):
   Tab 2 detecta deterioro en tiempo real (ventanas de 14–30 días y pronóstico).
 """)
 
+    with st.expander("⚠️ Descarga de responsabilidad", expanded=True):
+        st.markdown("""
+Esta aplicación (**AgroCrédito**) ha sido desarrollada por AXA Climate con **fines exclusivamente demostrativos**, como Producto Mínimo Viable (*Minimum Viable Product, MVP*). Su objetivo es ilustrar capacidades técnicas y metodológicas de evaluación agroclimática; no constituye una herramienta operativa, financiera ni de asesoramiento, sino que pretende sentar las bases para el desarrollo futuro de una herramienta operativa.
+
+**AXA Climate no asume responsabilidad alguna** sobre el uso que se haga de esta aplicación, ni sobre los resultados, indicadores, puntuaciones de riesgo o decisiones —crediticias o de cualquier otra naturaleza— que se deriven de ella. Los datos, umbrales y modelos aquí presentados son aproximados, y **no deben utilizarse como única base para ninguna decisión real**. En todo caso, la aplicación es un apoyo informativo y **no sustituye el criterio profesional del analista de crédito** ni de ningún otro responsable de la decisión.
+
+Para industrializar esta solución o integrarla en un sistema operativo y sofisticado sería necesario, entre otros: reforzar la **seguridad y gobernanza de los datos** (cifrado, control de accesos, cumplimiento de normativa de protección de datos), establecer procesos de **validación, calibración y auditoría** de los modelos, y garantizar la **trazabilidad y el mantenimiento** continuos de la plataforma.
+
+El uso de esta aplicación implica la aceptación de los presentes términos.
+""")
+
 #  TAB 1 · VALIDACIÓN PRE-CRÉDITO
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_validacion:
